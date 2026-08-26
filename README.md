@@ -1,8 +1,8 @@
 # D-GITA Workspace
 
-En moderne, interaktiv prototype til kommunale IT-anskaffelser. Løsningen samler ansøgning, sagsbehandling, ledergodkendelse, dokumentation, kvitteringer og administration i ét responsivt workspace.
+En moderne, interaktiv portal til kommunale IT-anskaffelser. Løsningen samler ansøgning, sagsbehandling, ledergodkendelse, dokumentation, kvitteringer og administration i ét responsivt workspace.
 
-Sagsdata er fiktive, mens systemopslaget er genereret fra de udleverede KITOS- og Kalundborg-oversigter. I Cloudflare/Sites-runtime gemmes kladder i D1 og dokumentbytes i R2. I et Vercel-preview uden tilkoblet database eller objektlager anvendes en tydeligt markeret IndexedDB-fallback på den aktuelle enhed. Prototypen sender endnu ikke rigtige Outlook-mails.
+De indlæste startsager er fiktive, mens systemopslaget er genereret fra de udleverede KITOS- og Kalundborg-oversigter. D1 er det autoritative datalager, og dokumentbytes gemmes privat i R2. Portalen sender endnu ikke rigtige Outlook-mails.
 
 ## Formularmotor
 
@@ -11,7 +11,8 @@ Ansøgningsformularen har ti trin og én samlet, typesikker kladde. Motoren inde
 - dokumenterede synligheds- og kravregler fra Power Pages-formularen
 - betingede underspørgsmål for bl.a. erstatningssystem, markedsafdækning, tilkøb, budget, persondata og tværgående funktionalitet
 - fem dokumentflows for risikovurdering, databehandleraftale, kontrakt, leverandørtjekliste og arkitektur
-- vedvarende kladder i D1 og validerede dokumentuploads i R2 samt lokal preview-fallback
+- brugerejede kladder i D1 og validerede dokumentuploads med kontrolsum i R2
+- versionslåst snapshot, bilagsmanifest og auditpost ved indsendelse
 - trinvalidering, låst fremadnavigation og dynamisk gennemgang før indsendelse
 - dansk beløbsformat, beregnet total og kontrol af implementeringsdatoer
 - udeladelse af skjulte svar og fejlede bilag fra indsendelsessnapshot
@@ -20,7 +21,7 @@ Systemkataloget indeholder 4.656 KITOS-poster. De 420 Kalundborg-systemer er kob
 
 ## Roller, adgang og admin
 
-Prototypen har præcis tre testroller, som kan vælges i topbaren:
+Portalen har præcis tre roller. I det lokale testmiljø kan de vælges i topbaren:
 
 - Bruger: opretter ansøgninger og ser kun sager, der matcher brugerens stabile ejer-id og tenant
 - D-GITA-konsulent: ser kommunens arbejdskø, kommenterer konkrete ansøgningsfelter og udfylder de separate D-GITA-godkendelsesfelter
@@ -30,7 +31,7 @@ Adminmodulet håndterer portaltekster, formularhjælp, hele FAQ-listen, generell
 
 D-GITA-godkendelsen følger felterne fra Power Pages-kilden: godkendelse, dato, lovgrundlag, ansvarlige, IT-konsulent, infrastrukturændring, bemærkninger, interne kommentarer og fase. Ekstra ansvarlig vises betinget. Interne kommentarer eksponeres ikke i brugerens projektion eller kvittering.
 
-Rolledropdownen er kun en testmekanisme. Den er ikke en produktionsmæssig sikkerhedsgrænse, fordi demoens fiktive data ligger i klienten. En driftsudgave skal udlede identitet, rolle, tenant og ejer server-side fra Fælleskommunal Adgangsstyring eller kommunens Entra ID og gentage alle adgangskontroller i API/database.
+Rolledropdownen er kun en testmekanisme, men hvert skift opretter en ny servervalideret session. Rolle, kommune og ejer kontrolleres igen i API og database. Testlogin er automatisk deaktiveret uden for localhost, medmindre det aktiveres eksplicit. Providerkonfigurationen er klargjort til Fælleskommunal Adgangsstyring og Microsoft Entra ID.
 
 ## Vejledning og FAQ
 
@@ -57,11 +58,9 @@ npm run dev
 
 Åbn derefter [http://localhost:3000](http://localhost:3000).
 
-## Vercel-preview
+## Drift
 
-Repoet indeholder en eksplicit `vercel.json`, som bygger løsningen med Next.js. Hele det normaliserede systemkatalog er committed som JSON, så katalogsøgningen ikke afhænger af lokale Excel-filer.
-
-Uden en tilkoblet database og filstorage gemmer previewet kladder og dokumentbytes lokalt i browserens IndexedDB. Data er dermed knyttet til den aktuelle browser/enhed, og lokal indsendelse bliver ikke præsenteret som sendt til D-GITA. En driftsudgave på Vercel skal have en serverbaseret database og direkte objektlager-upload.
+Cloudflare/Sites-runtime med D1 og R2 er den autoritative driftsmodel. Hele det normaliserede systemkatalog er committed som JSON, så katalogsøgningen ikke afhænger af lokale Excel-filer. Et eventuelt Vercel-preview er ikke en funktionel driftsudgave, medmindre det senere får en tilsvarende database- og filadapter.
 
 ## Verifikation
 
@@ -76,8 +75,8 @@ npm test
 
 Den anbefalede rækkefølge for næste fase er:
 
-1. Forbind Fælleskommunal Adgangsstyring eller Microsoft Entra ID, og bind kladder/bilag til bruger, rolle og tenant frem for den nuværende sessionscookie.
-2. Tilføj checksum, virusscanning, retry og retention-politik til R2-uploadflowet.
+1. Forbind Fælleskommunal Adgangsstyring eller Microsoft Entra ID til den eksisterende provider- og sessionsmodel.
+2. Tilføj virusscanning og retention-politik til R2-uploadflowet; kontrolsum og versionslåsning er implementeret.
 3. Opret PDF-kvittering og en idempotent mail-outbox med statusserne `queued`, `sent` og `failed`.
 4. Forbind Microsoft Graph til Outlook-godkendelser uden secrets i browseren.
 5. Tilføj auditspor, ESDH-journalisering og integrationstests for hele ansøgning → godkendelse → kvittering-flowet.

@@ -1,236 +1,197 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+
+import type { Actor } from "../auth/types";
 import {
   DEFAULT_CONTENT,
   DEFAULT_IMAGES,
-  EMPTY_D_GITA_APPROVAL,
-  editContentEntry,
-  editImageEntry,
   normalizeDgitaApproval,
   type ContentEntry,
   type DgitaApproval,
   type FieldComment,
   type ImageEntry,
-  type WorkspaceViewer,
 } from "./model";
 
-const STORAGE_KEY = "dgita-demo-workspace-v3";
-const LEGACY_STORAGE_KEY = "dgita-demo-workspace-v2";
-
-type StoredWorkspace = {
-  version: 3;
+type PortalWorkspace = {
   content: ContentEntry[];
   images: ImageEntry[];
   approvals: Record<string, DgitaApproval>;
   fieldComments: FieldComment[];
 };
 
-type LegacyStoredWorkspace = Omit<StoredWorkspace, "version" | "images"> & {
-  version: 2;
-};
-
-const DEFAULT_APPROVALS: Record<string, DgitaApproval> = {
-  "ITA-001284": {
-    ...EMPTY_D_GITA_APPROVAL,
-    approved: "Ja",
-    date: "2026-08-26",
-    legalBasis: "GDPR",
-    responsible: "Peter Bjerre Ahlgren",
-    hasAdditionalResponsible: "Nej",
-    itConsultant: "Casper Kjeldsen Ravn",
-    infrastructureChanges: "Ja",
-    notes: "Arkitekturtegning skal eftersendes før endelig afslutning.",
-    internalComments: "Afstem teknisk ejer med Infrastruktur på næste statusmøde.",
-    phase: "Under behandling",
-  },
-};
-
-const INITIAL_WORKSPACE: StoredWorkspace = {
-  version: 3,
+const INITIAL_WORKSPACE: PortalWorkspace = {
   content: DEFAULT_CONTENT,
   images: DEFAULT_IMAGES,
-  approvals: DEFAULT_APPROVALS,
+  approvals: {},
   fieldComments: [],
 };
 
-function cloneInitialWorkspace(): StoredWorkspace {
-  return structuredClone(INITIAL_WORKSPACE);
-}
-
-function isStoredWorkspace(value: unknown): value is StoredWorkspace {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<StoredWorkspace>;
-  return (
-    candidate.version === 3 &&
-    Array.isArray(candidate.content) &&
-    Array.isArray(candidate.images) &&
-    candidate.approvals !== null &&
-    typeof candidate.approvals === "object" &&
-    Array.isArray(candidate.fieldComments)
+export function useDemoWorkspace(viewer: Actor) {
+  const [workspace, setWorkspace] = useState<PortalWorkspace>(() =>
+    structuredClone(INITIAL_WORKSPACE),
   );
-}
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-function isLegacyStoredWorkspace(value: unknown): value is LegacyStoredWorkspace {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<LegacyStoredWorkspace>;
-  return (
-    candidate.version === 2 &&
-    Array.isArray(candidate.content) &&
-    candidate.approvals !== null &&
-    typeof candidate.approvals === "object" &&
-    Array.isArray(candidate.fieldComments)
-  );
-}
-
-function mergeWorkspaceDefaults(workspace: StoredWorkspace): StoredWorkspace {
-  const contentIds = new Set(workspace.content.map((entry) => entry.id));
-  const imageIds = new Set(workspace.images.map((entry) => entry.id));
-  return {
-    ...workspace,
-    content: [
-      ...workspace.content,
-      ...DEFAULT_CONTENT.filter((entry) => !contentIds.has(entry.id)),
-    ],
-    images: [
-      ...workspace.images,
-      ...DEFAULT_IMAGES.filter((entry) => !imageIds.has(entry.id)),
-    ],
-  };
-}
-
-function persist(workspace: StoredWorkspace) {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
-  } catch {
-    // Demoen forbliver brugbar, hvis browseren blokerer lokal lagring.
-  }
-}
-
-export function useDemoWorkspace() {
-  const [workspace, setWorkspace] = useState<StoredWorkspace>(cloneInitialWorkspace);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/workspace", { cache: "no-store" });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      const payload = (await response.json()) as {
+        workspace?: PortalWorkspace;
+        error?: string;
+      };
+      if (!response.ok || !payload.workspace) {
+        throw new Error(payload.error || "Portalindholdet kunne ikke hentes.");
+      }
+      setWorkspace(payload.workspace);
+      setError(null);
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const timeout = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timeout);
+  }, [refresh, viewer.role, viewer.subject, viewer.tenantId]);
+
+  const mutate = useCallback(async (body: unknown) => {
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY)
-        ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (!raw) return;
-      const parsed: unknown = JSON.parse(raw);
-      const restored = isStoredWorkspace(parsed)
-        ? mergeWorkspaceDefaults(parsed)
-        : isLegacyStoredWorkspace(parsed)
-          ? mergeWorkspaceDefaults({ ...parsed, version: 3, images: structuredClone(DEFAULT_IMAGES) })
-          : null;
-      if (restored) {
-        window.setTimeout(() => {
-          if (!cancelled) {
-            setWorkspace(restored);
-            persist(restored);
-          }
-        }, 0);
+      const response = await fetch("/api/workspace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
       }
-    } catch {
-      // Korrupt demo-state ignoreres til fordel for de sikre standarddata.
+      if (!response.ok) throw new Error(payload.error || "Ændringen kunne ikke gemmes.");
+      setError(null);
+    } catch (reason) {
+      setError((reason as Error).message);
+      await refresh();
     }
-    return () => {
-      cancelled = true;
+  }, [refresh]);
+
+  const updateContent = useCallback((entry: ContentEntry, actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    const saved = {
+      ...entry,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor.displayName,
     };
-  }, []);
-
-  const commit = useCallback((update: (current: StoredWorkspace) => StoredWorkspace) => {
-    setWorkspace((current) => {
-      const next = update(current);
-      persist(next);
-      return next;
-    });
-  }, []);
-
-  const updateContent = useCallback((entry: ContentEntry, viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({
+    setWorkspace((current) => ({
       ...current,
-      content: editContentEntry(viewer, current.content, entry),
+      content: current.content.map((item) => item.id === entry.id ? saved : item),
     }));
+    void mutate({ action: "content.upsert", entry });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
-  const addContent = useCallback((entry: ContentEntry, viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({
-      ...current,
-      content: [
-        ...current.content,
-        {
-          ...entry,
-          updatedAt: new Date().toISOString(),
-          updatedBy: viewer.displayName,
-        },
-      ],
-    }));
+  const addContent = useCallback((entry: ContentEntry, actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    const saved = {
+      ...entry,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor.displayName,
+    };
+    setWorkspace((current) => ({ ...current, content: [...current.content, saved] }));
+    void mutate({ action: "content.upsert", entry });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
-  const removeContent = useCallback((id: string, viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({
+  const removeContent = useCallback((id: string, actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    setWorkspace((current) => ({
       ...current,
       content: current.content.filter((entry) => entry.id !== id),
     }));
+    void mutate({ action: "content.delete", id });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
-  const resetContent = useCallback((viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({ ...current, content: structuredClone(DEFAULT_CONTENT) }));
-    return true;
-  }, [commit]);
-
-  const updateImage = useCallback((entry: ImageEntry, viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({
+  const resetContent = useCallback((actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    setWorkspace((current) => ({
       ...current,
-      images: editImageEntry(viewer, current.images, entry),
+      content: structuredClone(DEFAULT_CONTENT),
     }));
+    void mutate({ action: "content.reset" });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
-  const resetImages = useCallback((viewer: WorkspaceViewer) => {
-    if (viewer.role !== "admin") return false;
-    commit((current) => ({ ...current, images: structuredClone(DEFAULT_IMAGES) }));
-    return true;
-  }, [commit]);
-
-  const updateApproval = useCallback((caseId: string, approval: DgitaApproval, viewer: WorkspaceViewer) => {
-    if (viewer.role === "user") return false;
-    commit((current) => ({
+  const updateImage = useCallback((entry: ImageEntry, actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    const saved = {
+      ...entry,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor.displayName,
+    };
+    setWorkspace((current) => ({
       ...current,
-      approvals: {
-        ...current.approvals,
-        [caseId]: {
-          ...normalizeDgitaApproval(approval),
-          updatedAt: new Date().toISOString(),
-          updatedBy: viewer.displayName,
-        },
-      },
+      images: current.images.map((item) => item.id === entry.id ? saved : item),
     }));
+    void mutate({ action: "image.upsert", entry });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
-  const addFieldComment = useCallback((comment: FieldComment, viewer: WorkspaceViewer) => {
-    if (viewer.role === "user") return false;
-    commit((current) => ({
+  const resetImages = useCallback((actor: Actor) => {
+    if (actor.role !== "admin") return false;
+    setWorkspace((current) => ({ ...current, images: structuredClone(DEFAULT_IMAGES) }));
+    void mutate({ action: "image.reset" });
+    return true;
+  }, [mutate]);
+
+  const updateApproval = useCallback((caseId: string, approval: DgitaApproval, actor: Actor) => {
+    if (actor.role === "user") return false;
+    const saved = {
+      ...normalizeDgitaApproval(approval),
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor.displayName,
+    };
+    setWorkspace((current) => ({
+      ...current,
+      approvals: { ...current.approvals, [caseId]: saved },
+    }));
+    void mutate({ action: "approval.save", caseId, approval });
+    return true;
+  }, [mutate]);
+
+  const addFieldComment = useCallback((comment: FieldComment, actor: Actor) => {
+    if (actor.role === "user") return false;
+    setWorkspace((current) => ({
       ...current,
       fieldComments: [...current.fieldComments, comment],
     }));
+    void mutate({
+      action: "field-comment.add",
+      comment: {
+        id: comment.id,
+        caseId: comment.caseId,
+        fieldId: comment.fieldId,
+        fieldLabel: comment.fieldLabel,
+        body: comment.body,
+        visibility: comment.visibility,
+      },
+    });
     return true;
-  }, [commit]);
+  }, [mutate]);
 
   return {
-    content: workspace.content,
-    images: workspace.images,
-    approvals: workspace.approvals,
-    fieldComments: workspace.fieldComments,
+    ...workspace,
+    loading,
+    error,
+    refresh,
     updateContent,
     addContent,
     removeContent,

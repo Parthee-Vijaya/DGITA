@@ -574,7 +574,7 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     id: "guide.save-draft",
     category: "form_help",
     title: "Husk at gemme formularen løbende",
-    body: "Tryk på “Gem kladde”, mens du udfylder ansøgningen og før du forlader formularen. I testmiljøet vises det tydeligt, om kladden er gemt på serveren eller kun lokalt på den aktuelle enhed.",
+    body: "Tryk på “Gem kladde”, mens du udfylder ansøgningen og før du forlader formularen. Kladden gemmes på serveren og er knyttet til din bruger og kommune.",
     location: "Vejledning · Formular",
     published: true,
   },

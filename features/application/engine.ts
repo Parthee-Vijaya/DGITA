@@ -29,6 +29,21 @@ export type SelectedCatalogSystem = {
   kitosStatus?: string;
 };
 
+export const APPROVING_LEADERS = [
+  {
+    id: "kalundborg-consultant-peter-bjerre",
+    name: "Peter Bjerre Ahlgren",
+  },
+  {
+    id: "demo-user-partheepan",
+    name: "Partheepan Vijayamohan",
+  },
+  {
+    id: "kalundborg-user-anita-lauridsen",
+    name: "Anita Mark Vig Lauridsen",
+  },
+] as const;
+
 export type ApplicationFormState = {
   schemaVersion: "dgita-v1";
   knownSystem: YesNo;
@@ -91,6 +106,7 @@ export type ApplicationFormState = {
   implementationUsers: string;
   hasArchitecture: YesNo;
   checklistJournalized: YesNo;
+  approvingLeaderId: string;
   approvingLeader: string;
   remarks: string;
   consent: boolean;
@@ -227,7 +243,87 @@ export const FORM_RULES: FormRule[] = [
   },
 ];
 
+/**
+ * Production-safe defaults for a brand-new application. Domain answers are
+ * deliberately empty so demo data can never be submitted as genuine input.
+ */
 export const initialApplicationState: ApplicationFormState = {
+  schemaVersion: "dgita-v1",
+  knownSystem: "ja",
+  replacesExisting: "nej",
+  replacementSystem: "",
+  catalogQuery: "",
+  selectedSystem: null,
+  manualCatalogEntry: false,
+  existsInKitos: "nej",
+  municipalityAlreadyUsesSystem: "nej",
+  manualSystemName: "",
+  businessType: "",
+  systemDescription: "",
+  descriptionUrl: "",
+  supplier: "",
+  supplierCvr: "",
+  rightsHolder: "",
+  rightsHolderCvr: "",
+  contactPerson: "",
+  department: "",
+  dataOwner: "",
+  systemOwner: "",
+  contractOwner: "",
+  systemAdministrators: "",
+  superUsers: "",
+  esdhContractUrl: "",
+  esdhDpaUrl: "",
+  responsibleOrganization: "",
+  acquisitionMethod: "",
+  marketResearch: "nej",
+  marketResearchSystems: "",
+  acquisitionType: "nyanskaffelse",
+  relatedSystem: "",
+  purpose: "",
+  functionDescription: "",
+  kleTopics: [],
+  existingProcessSystem: "nej",
+  existingProcessSystems: "",
+  crossCutting: "nej",
+  crossFunctionality: "",
+  crossDepartments: [],
+  hasBudget: "nej",
+  budgetAmount: "",
+  oneTimeCost: "",
+  yearlyCost: "",
+  otherCost: "",
+  benefits: "",
+  hasRiskAssessment: "nej",
+  needsRiskHelp: "nej",
+  personalData: "nej",
+  hasDpa: "nej",
+  hasContract: "nej",
+  hasSupplierChecklist: "nej",
+  dataClassification: "",
+  employeeAccess: "",
+  milestones: [],
+  implementationResources: "",
+  startDate: "",
+  endDate: "",
+  implementationUsers: "",
+  hasArchitecture: "nej",
+  checklistJournalized: "nej",
+  approvingLeaderId: "",
+  approvingLeader: "",
+  remarks: "",
+  consent: false,
+  attachments: {
+    "risk-assessment": [],
+    "data-processing-agreement": [],
+    contract: [],
+    "supplier-checklist": [],
+    architecture: [],
+  },
+};
+
+/** Fixture used exclusively by tests and seeded demonstration cases. */
+export const demoApplicationState: ApplicationFormState = {
   schemaVersion: "dgita-v1",
   knownSystem: "ja",
   replacesExisting: "nej",
@@ -293,6 +389,7 @@ export const initialApplicationState: ApplicationFormState = {
   implementationUsers: "0-9",
   hasArchitecture: "nej",
   checklistJournalized: "ja",
+  approvingLeaderId: "kalundborg-consultant-peter-bjerre",
   approvingLeader: "Peter Bjerre Ahlgren",
   remarks: "",
   consent: false,
@@ -530,9 +627,13 @@ export function getStepErrors(state: ApplicationFormState, step: number): FieldE
         ),
       ]);
     case 8:
-      return compact([
-        required("approvingLeader", state.approvingLeader, "Vælg den godkendende chef."),
-      ]);
+      return resolveApprovingLeader(state.approvingLeaderId, state.approvingLeader)
+        ? []
+        : [{
+            field: "approvingLeader",
+            message: "Vælg en gyldig godkendende chef.",
+            severity: "error",
+          }];
     case 9:
       return state.consent
         ? []
@@ -546,6 +647,22 @@ export function getStepErrors(state: ApplicationFormState, step: number): FieldE
     default:
       return [];
   }
+}
+
+export function resolveApprovingLeader(id: string, legacyName = "") {
+  return APPROVING_LEADERS.find(
+    (leader) => leader.id === id || (!id && leader.name === legacyName.trim()),
+  ) ?? null;
+}
+
+export function normalizeApprovingLeader(state: ApplicationFormState) {
+  const leader = resolveApprovingLeader(
+    state.approvingLeaderId || "",
+    state.approvingLeader,
+  );
+  return leader
+    ? { ...state, approvingLeaderId: leader.id, approvingLeader: leader.name }
+    : { ...state, approvingLeaderId: "", approvingLeader: "" };
 }
 
 export function getStepWarnings(state: ApplicationFormState, step: number): FieldError[] {

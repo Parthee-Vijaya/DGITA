@@ -56,6 +56,7 @@ export type Approval = "Ikke startet" | "Afventer" | "Godkendt" | "Afvist";
 
 export type CaseRecord = {
   id: string;
+  status?: string;
   tenantId: string;
   ownerSubject: string;
   ownerEmail: string;
@@ -68,6 +69,7 @@ export type CaseRecord = {
   municipality: string;
   leader: string;
   approval: Approval;
+  receiptAvailable?: boolean;
 };
 
 const partheepanOwner = {
@@ -173,13 +175,13 @@ export const DEMO_CASES: CaseRecord[] = [
     changed: "16-06-2026 08:27",
     consultant: "Anita Mark Vig Lauridsen",
     leader: "Anita Mark Vig Lauridsen",
-    approval: "Afventer",
+    approval: "Godkendt",
   },
   {
     ...partheepanOwner,
     id: "ITA-001213",
     system: "Abena Bevillingssystem",
-    phase: "Indsendt",
+    phase: "Under behandling",
     created: "01-06-2026 10:43",
     changed: "02-06-2026 08:34",
     consultant: "Peter Bjerre Ahlgren",

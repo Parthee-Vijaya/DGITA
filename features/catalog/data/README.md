@@ -1,6 +1,6 @@
 # D-GITA systemkatalog
 
-`system-catalog.json` er den komplette, deploybare runtimekilde til systemopslaget. Vercel-buildet har derfor ingen afhængighed til lokale Excel-filer.
+`system-catalog.json` er den komplette, deploybare runtimekilde til systemopslaget. Cloudflare-buildet har derfor ingen afhængighed til lokale Excel-filer.
 
 Kataloget er normaliseret fra:
 

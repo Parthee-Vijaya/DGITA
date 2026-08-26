@@ -346,6 +346,117 @@ export const portalSchemaStatements = [
   `CREATE INDEX IF NOT EXISTS portal_audit_events_actor_idx
     ON portal_audit_events(tenant_id, actor_user_id, occurred_at)`,
 
+  `CREATE TABLE IF NOT EXISTS portal_notifications (
+    id TEXT PRIMARY KEY NOT NULL,
+    tenant_id TEXT NOT NULL,
+    recipient_user_id TEXT NOT NULL,
+    application_id TEXT,
+    source_event_id TEXT,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    link_path TEXT,
+    status TEXT NOT NULL DEFAULT 'unread',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES portal_tenants(id) ON DELETE RESTRICT,
+    FOREIGN KEY (recipient_user_id) REFERENCES portal_users(id) ON DELETE CASCADE,
+    FOREIGN KEY (application_id) REFERENCES portal_applications(id) ON DELETE RESTRICT,
+    FOREIGN KEY (source_event_id) REFERENCES portal_audit_events(id) ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS portal_notifications_recipient_event_uidx
+    ON portal_notifications(recipient_user_id, source_event_id)`,
+  `CREATE INDEX IF NOT EXISTS portal_notifications_recipient_status_idx
+    ON portal_notifications(tenant_id, recipient_user_id, status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS portal_notifications_application_idx
+    ON portal_notifications(tenant_id, application_id, created_at)`,
+
+  `CREATE TABLE IF NOT EXISTS portal_receipts (
+    id TEXT PRIMARY KEY NOT NULL,
+    tenant_id TEXT NOT NULL,
+    application_id TEXT NOT NULL,
+    application_version_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'generating',
+    storage_key TEXT NOT NULL,
+    checksum_sha256 TEXT,
+    size_bytes INTEGER,
+    content_type TEXT NOT NULL DEFAULT 'application/pdf',
+    created_by_user_id TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    generated_at TEXT,
+    failure_reason TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES portal_tenants(id) ON DELETE RESTRICT,
+    FOREIGN KEY (application_id) REFERENCES portal_applications(id) ON DELETE RESTRICT,
+    FOREIGN KEY (application_version_id) REFERENCES portal_application_versions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by_user_id) REFERENCES portal_users(id) ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS portal_receipts_version_kind_uidx
+    ON portal_receipts(tenant_id, application_version_id, kind)`,
+  "CREATE UNIQUE INDEX IF NOT EXISTS portal_receipts_storage_key_uidx ON portal_receipts(storage_key)",
+  `CREATE INDEX IF NOT EXISTS portal_receipts_application_idx
+    ON portal_receipts(tenant_id, application_id, created_at)`,
+
+  `CREATE TABLE IF NOT EXISTS portal_mail_outbox (
+    id TEXT PRIMARY KEY NOT NULL,
+    tenant_id TEXT NOT NULL,
+    application_id TEXT,
+    recipient_user_id TEXT,
+    recipient_email TEXT NOT NULL,
+    recipient_name TEXT,
+    template_key TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    text_body TEXT NOT NULL,
+    html_body TEXT NOT NULL,
+    attachments_json TEXT NOT NULL DEFAULT '[]',
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    provider TEXT NOT NULL DEFAULT 'microsoft_graph',
+    provider_message_id TEXT,
+    last_error TEXT,
+    created_by_user_id TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sent_at TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES portal_tenants(id) ON DELETE RESTRICT,
+    FOREIGN KEY (application_id) REFERENCES portal_applications(id) ON DELETE RESTRICT,
+    FOREIGN KEY (recipient_user_id) REFERENCES portal_users(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES portal_users(id) ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS portal_mail_outbox_tenant_idempotency_uidx
+    ON portal_mail_outbox(tenant_id, idempotency_key)`,
+  `CREATE INDEX IF NOT EXISTS portal_mail_outbox_queue_idx
+    ON portal_mail_outbox(tenant_id, status, next_attempt_at, created_at)`,
+  `CREATE INDEX IF NOT EXISTS portal_mail_outbox_application_idx
+    ON portal_mail_outbox(tenant_id, application_id, created_at)`,
+
+  `CREATE TABLE IF NOT EXISTS portal_approval_requests (
+    id TEXT PRIMARY KEY NOT NULL,
+    tenant_id TEXT NOT NULL,
+    application_id TEXT NOT NULL,
+    application_version_id TEXT NOT NULL,
+    approver_email TEXT NOT NULL,
+    approver_name TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    decision_comment TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT NOT NULL,
+    decided_at TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES portal_tenants(id) ON DELETE RESTRICT,
+    FOREIGN KEY (application_id) REFERENCES portal_applications(id) ON DELETE RESTRICT,
+    FOREIGN KEY (application_version_id) REFERENCES portal_application_versions(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by_user_id) REFERENCES portal_users(id) ON DELETE RESTRICT
+  )`,
+  "CREATE UNIQUE INDEX IF NOT EXISTS portal_approval_requests_token_hash_uidx ON portal_approval_requests(token_hash)",
+  `CREATE INDEX IF NOT EXISTS portal_approval_requests_application_idx
+    ON portal_approval_requests(tenant_id, application_id, status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS portal_approval_requests_expiry_idx
+    ON portal_approval_requests(status, expires_at)`,
+
   `CREATE TRIGGER IF NOT EXISTS portal_application_versions_no_update
     BEFORE UPDATE ON portal_application_versions
     BEGIN SELECT RAISE(ABORT, 'submitted application versions are immutable'); END`,

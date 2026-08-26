@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import type { Actor } from "../auth/types";
 import {
@@ -28,6 +29,7 @@ const INITIAL_WORKSPACE: PortalWorkspace = {
 };
 
 export function useDemoWorkspace(viewer: Actor) {
+  const router = useRouter();
   const [workspace, setWorkspace] = useState<PortalWorkspace>(() =>
     structuredClone(INITIAL_WORKSPACE),
   );
@@ -39,7 +41,7 @@ export function useDemoWorkspace(viewer: Actor) {
     try {
       const response = await fetch("/api/workspace", { cache: "no-store" });
       if (response.status === 401) {
-        window.location.assign("/login");
+        router.replace("/login");
         return;
       }
       const payload = (await response.json()) as {
@@ -56,124 +58,115 @@ export function useDemoWorkspace(viewer: Actor) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timeout);
   }, [refresh, viewer.role, viewer.subject, viewer.tenantId]);
 
-  const mutate = useCallback(async (body: unknown) => {
+  const mutate = useCallback(async <T,>(body: unknown): Promise<T> => {
     try {
       const response = await fetch("/api/workspace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as T & { error?: string };
       if (response.status === 401) {
-        window.location.assign("/login");
-        return;
+        router.replace("/login");
+        throw new Error("Din session er udløbet. Log ind igen.");
       }
       if (!response.ok) throw new Error(payload.error || "Ændringen kunne ikke gemmes.");
       setError(null);
+      return payload;
     } catch (reason) {
       setError((reason as Error).message);
-      await refresh();
+      throw reason;
     }
-  }, [refresh]);
+  }, [router]);
 
-  const updateContent = useCallback((entry: ContentEntry, actor: Actor) => {
+  const updateContent = useCallback(async (entry: ContentEntry, actor: Actor) => {
     if (actor.role !== "admin") return false;
-    const saved = {
-      ...entry,
-      updatedAt: new Date().toISOString(),
-      updatedBy: actor.displayName,
-    };
+    const { entry: saved } = await mutate<{ entry: ContentEntry }>({
+      action: "content.upsert",
+      entry,
+    });
     setWorkspace((current) => ({
       ...current,
       content: current.content.map((item) => item.id === entry.id ? saved : item),
     }));
-    void mutate({ action: "content.upsert", entry });
     return true;
   }, [mutate]);
 
-  const addContent = useCallback((entry: ContentEntry, actor: Actor) => {
+  const addContent = useCallback(async (entry: ContentEntry, actor: Actor) => {
     if (actor.role !== "admin") return false;
-    const saved = {
-      ...entry,
-      updatedAt: new Date().toISOString(),
-      updatedBy: actor.displayName,
-    };
+    const { entry: saved } = await mutate<{ entry: ContentEntry }>({
+      action: "content.upsert",
+      entry,
+    });
     setWorkspace((current) => ({ ...current, content: [...current.content, saved] }));
-    void mutate({ action: "content.upsert", entry });
     return true;
   }, [mutate]);
 
-  const removeContent = useCallback((id: string, actor: Actor) => {
+  const removeContent = useCallback(async (id: string, actor: Actor) => {
     if (actor.role !== "admin") return false;
+    const { deleted } = await mutate<{ deleted: boolean }>({ action: "content.delete", id });
+    if (!deleted) return false;
     setWorkspace((current) => ({
       ...current,
       content: current.content.filter((entry) => entry.id !== id),
     }));
-    void mutate({ action: "content.delete", id });
     return true;
   }, [mutate]);
 
-  const resetContent = useCallback((actor: Actor) => {
+  const resetContent = useCallback(async (actor: Actor) => {
     if (actor.role !== "admin") return false;
+    await mutate<{ ok: true }>({ action: "content.reset" });
     setWorkspace((current) => ({
       ...current,
       content: structuredClone(DEFAULT_CONTENT),
     }));
-    void mutate({ action: "content.reset" });
     return true;
   }, [mutate]);
 
-  const updateImage = useCallback((entry: ImageEntry, actor: Actor) => {
+  const updateImage = useCallback(async (entry: ImageEntry, actor: Actor) => {
     if (actor.role !== "admin") return false;
-    const saved = {
-      ...entry,
-      updatedAt: new Date().toISOString(),
-      updatedBy: actor.displayName,
-    };
+    const { entry: saved } = await mutate<{ entry: ImageEntry }>({
+      action: "image.upsert",
+      entry,
+    });
     setWorkspace((current) => ({
       ...current,
       images: current.images.map((item) => item.id === entry.id ? saved : item),
     }));
-    void mutate({ action: "image.upsert", entry });
     return true;
   }, [mutate]);
 
-  const resetImages = useCallback((actor: Actor) => {
+  const resetImages = useCallback(async (actor: Actor) => {
     if (actor.role !== "admin") return false;
+    await mutate<{ ok: true }>({ action: "image.reset" });
     setWorkspace((current) => ({ ...current, images: structuredClone(DEFAULT_IMAGES) }));
-    void mutate({ action: "image.reset" });
     return true;
   }, [mutate]);
 
-  const updateApproval = useCallback((caseId: string, approval: DgitaApproval, actor: Actor) => {
+  const updateApproval = useCallback(async (caseId: string, approval: DgitaApproval, actor: Actor) => {
     if (actor.role === "user") return false;
-    const saved = {
-      ...normalizeDgitaApproval(approval),
-      updatedAt: new Date().toISOString(),
-      updatedBy: actor.displayName,
-    };
+    const { approval: saved } = await mutate<{ approval: DgitaApproval }>({
+      action: "approval.save",
+      caseId,
+      approval: normalizeDgitaApproval(approval),
+    });
     setWorkspace((current) => ({
       ...current,
       approvals: { ...current.approvals, [caseId]: saved },
     }));
-    void mutate({ action: "approval.save", caseId, approval });
     return true;
   }, [mutate]);
 
-  const addFieldComment = useCallback((comment: FieldComment, actor: Actor) => {
+  const addFieldComment = useCallback(async (comment: FieldComment, actor: Actor) => {
     if (actor.role === "user") return false;
-    setWorkspace((current) => ({
-      ...current,
-      fieldComments: [...current.fieldComments, comment],
-    }));
-    void mutate({
+    const { comment: saved } = await mutate<{ comment: FieldComment }>({
       action: "field-comment.add",
       comment: {
         id: comment.id,
@@ -184,6 +177,10 @@ export function useDemoWorkspace(viewer: Actor) {
         visibility: comment.visibility,
       },
     });
+    setWorkspace((current) => ({
+      ...current,
+      fieldComments: [...current.fieldComments, saved],
+    }));
     return true;
   }, [mutate]);
 

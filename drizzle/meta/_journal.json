@@ -15,6 +15,13 @@
       "when": 1787778625905,
       "tag": "0001_quiet_morg",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787780262793,
+      "tag": "0002_medical_chat",
+      "breakpoints": true
     }
   ]
 }

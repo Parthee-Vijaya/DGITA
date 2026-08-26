@@ -9,6 +9,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import type { WorkspaceRole } from "../../features/workspace/model";
 
@@ -25,6 +26,7 @@ type SessionResponse = {
 };
 
 export function LoginClient() {
+  const router = useRouter();
   const [role, setRole] = useState<WorkspaceRole>("user");
   const [devLoginEnabled, setDevLoginEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export function LoginClient() {
       .then(async (response) => {
         const payload = (await response.json()) as SessionResponse;
         if (payload.authenticated) {
-          window.location.replace("/");
+          router.replace("/");
           return;
         }
         setDevLoginEnabled(Boolean(payload.devLoginEnabled));
@@ -49,7 +51,7 @@ export function LoginClient() {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, []);
+  }, [router]);
 
   async function signInForTesting() {
     setSubmitting(true);
@@ -64,7 +66,8 @@ export function LoginClient() {
       if (!response.ok || !payload.authenticated) {
         throw new Error(payload.error || "Testlogin kunne ikke gennemføres.");
       }
-      window.location.assign("/");
+      router.replace("/");
+      router.refresh();
     } catch (reason) {
       setError((reason as Error).message);
       setSubmitting(false);

@@ -40,14 +40,18 @@ test("server-renderer D-GITA-login og beskytter portalen", async () => {
 
   const protectedResponse = await render("/");
   assert.equal(protectedResponse.status, 307);
-  assert.equal(new URL(protectedResponse.headers.get("location")).pathname, "/login");
+  assert.equal(
+    new URL(protectedResponse.headers.get("location"), "http://localhost").pathname,
+    "/login",
+  );
 });
 
 test("indeholder roller, workflows og ingen starter-preview", async () => {
-  const [page, portal, form, layout, css, packageJson] = await Promise.all([
+  const [page, portal, form, applicationRepository, layout, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/PortalClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../features/application/ApplicationFormView.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../features/application/server-repository.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -58,9 +62,10 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.match(portal, /Administration/);
   assert.match(portal, /Outlook/);
   assert.match(form, /Gem og indsend/);
-  assert.match(portal, /WSUS klient/);
+  assert.match(portal, /availableRows\.filter/);
+  assert.doesNotMatch(portal, /detail="WSUS klient"/);
   assert.match(portal, /ITA-001284/);
-  assert.match(portal, /application\.submitted/);
+  assert.match(applicationRepository, /application\.submitted/);
   assert.match(layout, /openGraph/);
   assert.match(css, /@media \(max-width: 540px\)/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

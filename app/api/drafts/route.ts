@@ -2,11 +2,12 @@ import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../featu
 import { requireActor } from "../../../features/auth/server";
 import {
   ApplicationRepositoryError,
+  beginApplicationCorrection,
   getLatestApplicationDraft,
   saveApplicationDraft,
   submitApplication,
 } from "../../../features/application/server-repository";
-import type { ApplicationFormState } from "../../../features/application/engine";
+import { isApplicationFormState } from "../../../features/application/state-validation";
 
 export async function GET(request: Request) {
   try {
@@ -22,26 +23,45 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const actor = await requireActor(request);
     const body = (await request.json()) as {
+      action?: unknown;
+      caseNumber?: unknown;
       id?: unknown;
       draft?: unknown;
       status?: unknown;
+      expectedRowVersion?: unknown;
     };
-    if (typeof body.id !== "string" || !isApplicationState(body.draft)) {
+    if (body.action === "begin-correction") {
+      if (typeof body.caseNumber !== "string") {
+        return noStoreJson({ error: "Ugyldigt sagsnummer." }, { status: 400 });
+      }
+      return noStoreJson({
+        draft: await beginApplicationCorrection(actor, body.caseNumber),
+      });
+    }
+    if (typeof body.id !== "string" || !isApplicationFormState(body.draft)) {
       return noStoreJson({ error: "Ugyldig kladde." }, { status: 400 });
     }
+    if (body.status !== "draft" && body.status !== "submitted") {
+      return noStoreJson({ error: "Ugyldig kladdestatus." }, { status: 400 });
+    }
+    if (
+      body.expectedRowVersion !== undefined &&
+      body.expectedRowVersion !== null &&
+      (!Number.isInteger(body.expectedRowVersion) ||
+        (body.expectedRowVersion as number) < 1)
+    ) {
+      return noStoreJson({ error: "Ugyldig versionsmarkør." }, { status: 400 });
+    }
+    const expectedRowVersion = typeof body.expectedRowVersion === "number"
+      ? body.expectedRowVersion
+      : null;
     const result = body.status === "submitted"
-      ? await submitApplication(actor, body.id, body.draft)
-      : await saveApplicationDraft(actor, body.id, body.draft);
+      ? await submitApplication(actor, body.id, body.draft, expectedRowVersion)
+      : await saveApplicationDraft(actor, body.id, body.draft, expectedRowVersion);
     return noStoreJson(result);
   } catch (error) {
     return applicationError(error);
   }
-}
-
-function isApplicationState(value: unknown): value is ApplicationFormState {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ApplicationFormState>;
-  return candidate.schemaVersion === "dgita-v1" && Boolean(candidate.attachments);
 }
 
 function applicationError(error: unknown) {

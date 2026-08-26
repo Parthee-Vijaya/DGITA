@@ -180,14 +180,15 @@ export function EditorDrawer({
 }: {
   selection: EditorSelection | null;
   onClose: () => void;
-  onSaveContent: (entry: ContentEntry) => boolean;
-  onSaveImage: (entry: ImageEntry) => boolean;
-  onResetImages: () => void;
+  onSaveContent: (entry: ContentEntry) => Promise<boolean>;
+  onSaveImage: (entry: ImageEntry) => Promise<boolean>;
+  onResetImages: () => Promise<boolean>;
   onOpenLibrary: () => void;
 }) {
   const [draft, setDraft] = useState<EditorSelection | null>(selection);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -223,7 +224,7 @@ export function EditorDrawer({
     }
   }
 
-  function save() {
+  async function save() {
     const currentDraft = draft;
     if (!currentDraft) return;
     if (currentDraft.kind === "content") {
@@ -235,7 +236,14 @@ export function EditorDrawer({
         setError("Brug https://, mailto: eller en intern sti, der starter med /.");
         return;
       }
-      if (onSaveContent(currentDraft.entry)) onClose();
+      setSaving(true);
+      try {
+        if (await onSaveContent(currentDraft.entry)) onClose();
+      } catch (reason) {
+        setError((reason as Error).message);
+      } finally {
+        setSaving(false);
+      }
       return;
     }
     if (!isSafeImageUrl(currentDraft.entry.src)) {
@@ -246,7 +254,26 @@ export function EditorDrawer({
       setError("Skriv en beskrivende alttekst af hensyn til tilgængelighed.");
       return;
     }
-    if (onSaveImage(currentDraft.entry)) onClose();
+    setSaving(true);
+    try {
+      if (await onSaveImage(currentDraft.entry)) onClose();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetImages() {
+    setSaving(true);
+    setError("");
+    try {
+      if (await onResetImages()) onClose();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -276,7 +303,7 @@ export function EditorDrawer({
               <label>Billedadresse<input value={draft.entry.src} onChange={(event) => setDraft({ kind: "image", entry: { ...draft.entry, src: event.target.value } })} /></label>
               <label>Alttekst<input value={draft.entry.alt} onChange={(event) => setDraft({ kind: "image", entry: { ...draft.entry, alt: event.target.value } })} /></label>
               <label className="cms-upload-button"><Upload size={16} /> {uploading ? "Behandler billede…" : "Upload fra computer"}<input type="file" accept="image/png,image/jpeg,image/webp,image/avif" disabled={uploading} onChange={uploadImage} /></label>
-              <button className="cms-reset-images" type="button" onClick={onResetImages}><RotateCcw size={15} /> Gendan standardbilleder</button>
+              <button className="cms-reset-images" type="button" disabled={saving} onClick={() => void resetImages()}><RotateCcw size={15} /> Gendan standardbilleder</button>
             </>
           )}
           {error ? <p className="cms-error" role="alert">{error}</p> : null}
@@ -284,7 +311,7 @@ export function EditorDrawer({
 
         <footer>
           <button type="button" onClick={onOpenLibrary}><PencilLine size={15} /> Åbn indholdsbibliotek</button>
-          <button className="cms-save" type="button" onClick={save}><Save size={16} /> Gem ændring</button>
+          <button className="cms-save" type="button" disabled={saving || uploading} onClick={() => void save()}><Save size={16} /> {saving ? "Gemmer…" : "Gem ændring"}</button>
         </footer>
       </aside>
     </>

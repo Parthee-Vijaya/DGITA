@@ -31,7 +31,11 @@ export async function listCaseAttachments(actor: ServerActor, caseNumber: string
       ON application.id = attachment.application_id
       AND application.tenant_id = attachment.tenant_id
     WHERE attachment.tenant_id = ? AND application.case_number = ?
-      AND attachment.status = 'ready' ${ownerClause}
+      AND attachment.status = 'ready'
+      AND (
+        (application.current_version_id IS NULL AND attachment.application_version_id IS NULL)
+        OR attachment.application_version_id = application.current_version_id
+      ) ${ownerClause}
     ORDER BY attachment.created_at, attachment.id
   `);
   const result = actor.role === "user"
@@ -61,7 +65,11 @@ export async function getAttachmentDownload(actor: ServerActor, attachmentId: st
       ON application.id = attachment.application_id
       AND application.tenant_id = attachment.tenant_id
     WHERE attachment.id = ? AND attachment.tenant_id = ?
-      AND attachment.status = 'ready' ${ownerClause}
+      AND attachment.status = 'ready'
+      AND (
+        (application.current_version_id IS NULL AND attachment.application_version_id IS NULL)
+        OR attachment.application_version_id = application.current_version_id
+      ) ${ownerClause}
     LIMIT 1
   `);
   const row = actor.role === "user"

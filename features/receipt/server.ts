@@ -1,0 +1,592 @@
+import {
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  type PDFFont,
+  type PDFPage,
+} from "pdf-lib";
+
+import { getPersistenceBindings } from "../../db/persistence";
+import type { ServerActor } from "../auth/types";
+import type { ApplicationFormState } from "../application/engine";
+import { preparePortalData, resolveActorUserId } from "../workspace/server-repository";
+
+export type ReceiptKind = "submission" | "approval" | "final";
+
+type ReceiptApplicationRow = {
+  id: string;
+  case_number: string;
+  system_name: string | null;
+  status: string;
+  owner_user_id: string;
+  owner_name: string;
+  owner_email: string;
+  receipt_version_id: string | null;
+  receipt_version_number: number | null;
+  snapshot_json: string | null;
+  submitted_at: string | null;
+  approval_status: "approved" | "rejected" | null;
+  approver_name: string | null;
+  decision_comment: string | null;
+  decided_at: string | null;
+};
+
+type StoredReceiptRow = {
+  id: string;
+  storage_key: string;
+  checksum_sha256: string | null;
+  size_bytes: number | null;
+};
+
+export class ReceiptError extends Error {
+  constructor(
+    readonly status: 400 | 403 | 404 | 409 | 422 | 500,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ReceiptError";
+  }
+}
+
+export async function getOrCreateReceipt(
+  actor: ServerActor,
+  caseNumber: string,
+  kind: ReceiptKind = "submission",
+  expectedApplicationVersionId?: string,
+) {
+  const DB = await preparePortalData();
+  const actorUserId = await resolveActorUserId(DB, actor);
+  const application = await findAccessibleApplication(
+    DB,
+    actor,
+    actorUserId,
+    caseNumber,
+    expectedApplicationVersionId,
+  );
+  if (
+    !application.receipt_version_id ||
+    application.receipt_version_number === null ||
+    !application.snapshot_json
+  ) {
+    throw new ReceiptError(409, "En kladde har endnu ingen versionslåst kvittering.");
+  }
+  if (kind === "approval" && !application.approval_status) {
+    throw new ReceiptError(409, "Lederbeslutningen er endnu ikke registreret.");
+  }
+  if (kind === "final" && application.status !== "closed") {
+    throw new ReceiptError(409, "Sagen er endnu ikke afsluttet.");
+  }
+
+  const { FILES } = await getPersistenceBindings();
+  const stored = await DB.prepare(`
+    SELECT id, storage_key, checksum_sha256, size_bytes
+    FROM portal_receipts
+    WHERE tenant_id = ? AND application_version_id = ? AND kind = ? AND status = 'ready'
+    LIMIT 1
+  `)
+    .bind(actor.tenantId, application.receipt_version_id, kind)
+    .first<StoredReceiptRow>();
+
+  if (stored) {
+    const object = await FILES.get(stored.storage_key);
+    if (object && stored.checksum_sha256 && stored.size_bytes !== null) {
+      const storedBytes = new Uint8Array(await object.arrayBuffer());
+      const storedChecksum = await sha256(storedBytes);
+      if (
+        storedBytes.byteLength === stored.size_bytes &&
+        storedChecksum === stored.checksum_sha256
+      ) {
+      return {
+        bytes: storedBytes,
+        filename: receiptFilename(application.case_number, kind),
+        checksum: storedChecksum,
+      };
+      }
+    }
+  }
+
+  const state = parseSnapshot(application.snapshot_json);
+  const bytes = await renderReceipt(application, state, kind);
+  const checksum = await sha256(bytes);
+  const receiptId = stored?.id ?? `receipt:${actor.tenantId}:${application.receipt_version_id}:${kind}`;
+  const storageKey = `tenants/${actor.tenantId}/applications/${application.id}/receipts/${application.receipt_version_id}/${kind}-${checksum}.pdf`;
+  const now = new Date().toISOString();
+
+  await FILES.put(storageKey, bytes, {
+    httpMetadata: { contentType: "application/pdf" },
+    customMetadata: {
+      tenantId: actor.tenantId,
+      applicationId: application.id,
+      applicationVersionId: application.receipt_version_id,
+      kind,
+      checksum,
+    },
+  });
+
+  await DB.batch([
+      DB.prepare(`
+        INSERT INTO portal_receipts
+          (id, tenant_id, application_id, application_version_id, kind, status,
+           storage_key, checksum_sha256, size_bytes, content_type,
+           created_by_user_id, created_at, generated_at, failure_reason)
+        VALUES (?, ?, ?, ?, ?, 'ready', ?, ?, ?, 'application/pdf', ?, ?, ?, NULL)
+        ON CONFLICT(tenant_id, application_version_id, kind) DO UPDATE SET
+          status = 'ready',
+          storage_key = excluded.storage_key,
+          checksum_sha256 = excluded.checksum_sha256,
+          size_bytes = excluded.size_bytes,
+          generated_at = excluded.generated_at,
+          failure_reason = NULL
+      `).bind(
+        receiptId,
+        actor.tenantId,
+        application.id,
+        application.receipt_version_id,
+        kind,
+        storageKey,
+        checksum,
+        bytes.byteLength,
+        actorUserId,
+        now,
+        now,
+      ),
+      DB.prepare(`
+        INSERT INTO portal_audit_events
+          (id, tenant_id, application_id, actor_user_id, actor_subject, event_type,
+           entity_type, entity_id, payload_json, ip_hash, occurred_at)
+        VALUES (?, ?, ?, ?, ?, 'receipt.generated', 'receipt', ?, ?, NULL, ?)
+      `).bind(
+        crypto.randomUUID(),
+        actor.tenantId,
+        application.id,
+        actorUserId,
+        actor.subject,
+        receiptId,
+        JSON.stringify({ kind, versionNumber: application.receipt_version_number, checksum }),
+        now,
+      ),
+  ]);
+
+  return { bytes, filename: receiptFilename(application.case_number, kind), checksum };
+}
+
+async function findAccessibleApplication(
+  DB: D1Database,
+  actor: ServerActor,
+  actorUserId: string,
+  caseNumber: string,
+  expectedApplicationVersionId?: string,
+) {
+  const ownerClause = actor.role === "user" ? "AND a.owner_user_id = ?" : "";
+  const statement = DB.prepare(`
+    SELECT a.id, a.case_number, a.system_name, a.status, a.owner_user_id,
+           owner.display_name AS owner_name, owner.email AS owner_email,
+           version.id AS receipt_version_id,
+           version.version_number AS receipt_version_number,
+           version.snapshot_json, version.submitted_at,
+           leader_approval.status AS approval_status,
+           leader_approval.approver_name, leader_approval.decision_comment,
+           leader_approval.decided_at
+    FROM portal_applications a
+    INNER JOIN portal_users owner ON owner.id = a.owner_user_id
+    LEFT JOIN portal_application_versions version
+      ON version.id = COALESCE(?, a.current_version_id)
+      AND version.application_id = a.id AND version.tenant_id = a.tenant_id
+    LEFT JOIN portal_approval_requests leader_approval
+      ON leader_approval.id = (
+        SELECT request.id FROM portal_approval_requests request
+        WHERE request.application_id = a.id
+          AND request.application_version_id = version.id
+          AND request.status IN ('approved', 'rejected')
+        ORDER BY request.decided_at DESC, request.id DESC LIMIT 1
+      )
+    WHERE a.tenant_id = ? AND a.case_number = ? ${ownerClause}
+    LIMIT 1
+  `);
+  const row = actor.role === "user"
+    ? await statement.bind(expectedApplicationVersionId ?? null, actor.tenantId, caseNumber, actorUserId).first<ReceiptApplicationRow>()
+    : await statement.bind(expectedApplicationVersionId ?? null, actor.tenantId, caseNumber).first<ReceiptApplicationRow>();
+  if (!row) throw new ReceiptError(404, "Sagen findes ikke, eller du har ikke adgang.");
+  return row;
+}
+
+function parseSnapshot(value: string) {
+  try {
+    const parsed = JSON.parse(value) as ApplicationFormState;
+    if (parsed.schemaVersion !== "dgita-v1") throw new Error("schema");
+    return parsed;
+  } catch {
+    throw new ReceiptError(422, "Den indsendte version kan ikke læses.");
+  }
+}
+
+async function renderReceipt(
+  application: ReceiptApplicationRow,
+  state: ApplicationFormState,
+  kind: ReceiptKind,
+) {
+  const document = await PDFDocument.create();
+  document.setTitle(`D-GITA kvittering ${application.case_number}`);
+  document.setAuthor("D-GITA · Kalundborg Kommune");
+  document.setSubject("Versionslåst kvittering for IT-anskaffelse");
+  document.setCreator("D-GITA-portalen");
+  const documentDate = receiptDocumentDate(application, kind);
+  document.setCreationDate(documentDate);
+  document.setModificationDate(documentDate);
+
+  const regular = await document.embedFont(StandardFonts.Helvetica);
+  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const layout = new ReceiptLayout(document, regular, bold);
+
+  layout.heading("D-GITA", "Kvittering for IT-anskaffelse");
+  layout.meta("Sagsnummer", application.case_number);
+  layout.meta("Kvitteringstype", receiptKindLabel(kind));
+  layout.meta("Version", String(application.receipt_version_number));
+  layout.meta("Indsendt", formatDate(application.submitted_at));
+  layout.meta("Anmoder", `${application.owner_name} · ${application.owner_email}`);
+  layout.meta("System", application.system_name || displaySystem(state));
+  if (kind === "approval") {
+    layout.meta("Leders beslutning", application.approval_status === "approved" ? "Godkendt" : application.approval_status === "rejected" ? "Afvist" : "Ikke registreret");
+    layout.meta("Godkendende leder", application.approver_name || state.approvingLeader);
+    layout.meta("Beslutningstidspunkt", formatDate(application.decided_at));
+    if (application.decision_comment) layout.meta("Bemærkning", application.decision_comment.slice(0, 120));
+  }
+  layout.rule();
+  layout.paragraph(
+    "Denne kvittering gengiver den versionslåste ansøgning. Kontrolsummen og bilagsmanifestet registreres i portalens auditspor.",
+  );
+
+  for (const section of receiptSections(state)) {
+    layout.section(section.title);
+    for (const [label, value] of section.rows) layout.field(label, value);
+  }
+
+  layout.finish(application.case_number);
+  return document.save({ useObjectStreams: false });
+}
+
+class ReceiptLayout {
+  private page!: PDFPage;
+  private y = 0;
+  private pageNumber = 0;
+  private readonly width = 595.28;
+  private readonly height = 841.89;
+  private readonly margin = 54;
+
+  constructor(
+    private readonly document: PDFDocument,
+    private readonly regular: PDFFont,
+    private readonly bold: PDFFont,
+  ) {
+    this.newPage();
+  }
+
+  heading(eyebrow: string, title: string) {
+    this.page.drawRectangle({
+      x: 0,
+      y: this.height - 184,
+      width: this.width,
+      height: 184,
+      color: rgb(0.04, 0.12, 0.11),
+    });
+    this.page.drawText(pdfSafe(eyebrow.toUpperCase()), {
+      x: this.margin,
+      y: this.height - 70,
+      size: 11,
+      font: this.bold,
+      color: rgb(0.58, 0.79, 0.66),
+    });
+    this.page.drawText(pdfSafe(title), {
+      x: this.margin,
+      y: this.height - 118,
+      size: 25,
+      font: this.bold,
+      color: rgb(1, 1, 1),
+    });
+    this.y = this.height - 220;
+  }
+
+  meta(label: string, value: string) {
+    this.ensure(28);
+    this.page.drawText(pdfSafe(label), {
+      x: this.margin,
+      y: this.y,
+      size: 8.5,
+      font: this.bold,
+      color: rgb(0.35, 0.4, 0.39),
+    });
+    this.page.drawText(pdfSafe(value || "Ikke oplyst"), {
+      x: this.margin + 112,
+      y: this.y,
+      size: 10.5,
+      font: this.regular,
+      color: rgb(0.08, 0.13, 0.12),
+    });
+    this.y -= 24;
+  }
+
+  rule() {
+    this.y -= 4;
+    this.page.drawLine({
+      start: { x: this.margin, y: this.y },
+      end: { x: this.width - this.margin, y: this.y },
+      thickness: 0.7,
+      color: rgb(0.81, 0.84, 0.82),
+    });
+    this.y -= 20;
+  }
+
+  paragraph(value: string) {
+    const lines = wrapText(pdfSafe(value), this.regular, 10, this.width - 2 * this.margin);
+    this.ensure(lines.length * 14 + 12);
+    for (const line of lines) {
+      this.page.drawText(line, {
+        x: this.margin,
+        y: this.y,
+        size: 10,
+        font: this.regular,
+        color: rgb(0.24, 0.29, 0.28),
+      });
+      this.y -= 14;
+    }
+    this.y -= 10;
+  }
+
+  section(title: string) {
+    this.ensure(44);
+    this.y -= 8;
+    this.page.drawText(pdfSafe(title), {
+      x: this.margin,
+      y: this.y,
+      size: 14,
+      font: this.bold,
+      color: rgb(0.04, 0.22, 0.17),
+    });
+    this.y -= 25;
+  }
+
+  field(label: string, value: string) {
+    const safeValue = pdfSafe(value || "Ikke oplyst");
+    const lines = wrapText(safeValue, this.regular, 9.5, 322);
+    const height = Math.max(28, lines.length * 13 + 12);
+    this.ensure(height + 6);
+    this.page.drawText(pdfSafe(label), {
+      x: this.margin,
+      y: this.y,
+      size: 8.5,
+      font: this.bold,
+      color: rgb(0.38, 0.42, 0.41),
+    });
+    let valueY = this.y;
+    for (const line of lines) {
+      this.page.drawText(line, {
+        x: this.margin + 145,
+        y: valueY,
+        size: 9.5,
+        font: this.regular,
+        color: rgb(0.08, 0.13, 0.12),
+      });
+      valueY -= 13;
+    }
+    this.y -= height;
+    this.page.drawLine({
+      start: { x: this.margin, y: this.y + 6 },
+      end: { x: this.width - this.margin, y: this.y + 6 },
+      thickness: 0.35,
+      color: rgb(0.88, 0.9, 0.89),
+    });
+  }
+
+  finish(caseNumber: string) {
+    const pages = this.document.getPages();
+    pages.forEach((page, index) => {
+      page.drawText(pdfSafe(`${caseNumber} · D-GITA · Side ${index + 1} af ${pages.length}`), {
+        x: this.margin,
+        y: 27,
+        size: 8,
+        font: this.regular,
+        color: rgb(0.42, 0.46, 0.45),
+      });
+    });
+  }
+
+  private ensure(required: number) {
+    if (this.y - required < 52) this.newPage();
+  }
+
+  private newPage() {
+    this.page = this.document.addPage([this.width, this.height]);
+    this.pageNumber += 1;
+    this.y = this.height - this.margin;
+    if (this.pageNumber > 1) {
+      this.page.drawText("D-GITA · Versionslåst ansøgning", {
+        x: this.margin,
+        y: this.y,
+        size: 9,
+        font: this.bold,
+        color: rgb(0.04, 0.22, 0.17),
+      });
+      this.y -= 30;
+    }
+  }
+}
+
+function receiptSections(state: ApplicationFormState) {
+  return [
+    {
+      title: "System og ansvar",
+      rows: [
+        ["System", displaySystem(state)],
+        ["Forretningsområde", state.businessType],
+        ["Beskrivelse", state.systemDescription],
+        ["Leverandør", state.supplier],
+        ["Rettighedshaver", state.rightsHolder],
+        ["Kontaktperson", state.contactPerson],
+        ["Afdeling", state.department],
+        ["Dataejer", state.dataOwner],
+        ["Systemejer", state.systemOwner],
+      ],
+    },
+    {
+      title: "Anskaffelse og formål",
+      rows: [
+        ["Anskaffelsesmetode", state.acquisitionMethod],
+        ["Anskaffelsestype", state.acquisitionType === "tilkøb" ? "Tilkøb" : "Nyanskaffelse"],
+        ["Formål", state.purpose],
+        ["Funktionalitet", state.functionDescription],
+        ["Tværgående", yesNo(state.crossCutting)],
+        ["Berørte enheder", state.crossDepartments.join(", ")],
+        ["Gevinster", state.benefits],
+      ],
+    },
+    {
+      title: "Økonomi og implementering",
+      rows: [
+        ["Budget til rådighed", yesNo(state.hasBudget)],
+        ["Budgetbeløb", money(state.budgetAmount)],
+        ["Engangsomkostning", money(state.oneTimeCost)],
+        ["Årlig omkostning", money(state.yearlyCost)],
+        ["Øvrige omkostninger", money(state.otherCost)],
+        ["Startdato", state.startDate],
+        ["Slutdato", state.endDate],
+        ["Antal brugere", state.implementationUsers],
+        ["Ressourcer", state.implementationResources],
+      ],
+    },
+    {
+      title: "Data, risiko og dokumentation",
+      rows: [
+        ["Personoplysninger", yesNo(state.personalData)],
+        ["Dataklassifikation", state.dataClassification],
+        ["Risikovurdering", yesNo(state.hasRiskAssessment)],
+        ["Databehandleraftale", yesNo(state.hasDpa)],
+        ["Kontrakt", yesNo(state.hasContract)],
+        ["Leverandørtjekliste", yesNo(state.hasSupplierChecklist)],
+        ["Arkitekturbeskrivelse", yesNo(state.hasArchitecture)],
+        ["Bilag", attachmentSummary(state)],
+      ],
+    },
+    {
+      title: "Godkendelse",
+      rows: [
+        ["Godkendende chef", state.approvingLeader],
+        ["Bemærkninger", state.remarks],
+        ["Samtykke registreret", state.consent ? "Ja" : "Nej"],
+      ],
+    },
+  ] satisfies Array<{ title: string; rows: Array<[string, string]> }>;
+}
+
+function displaySystem(state: ApplicationFormState) {
+  return state.selectedSystem?.name || state.manualSystemName || state.catalogQuery || "Ikke navngivet";
+}
+
+function attachmentSummary(state: ApplicationFormState) {
+  const names = Object.values(state.attachments)
+    .flat()
+    .filter((attachment) => attachment.status === "uploaded")
+    .map((attachment) => attachment.name);
+  return names.length ? names.join(", ") : "Ingen bilag";
+}
+
+function yesNo(value: "ja" | "nej") {
+  return value === "ja" ? "Ja" : "Nej";
+}
+
+function money(value: string) {
+  return value.trim() ? `${value.trim()} kr.` : "Ikke oplyst";
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "Ikke registreret";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("da-DK", { dateStyle: "long", timeStyle: "short" }).format(date);
+}
+
+function receiptDocumentDate(application: ReceiptApplicationRow, kind: ReceiptKind) {
+  const value = kind === "approval" && application.decided_at
+    ? application.decided_at
+    : application.submitted_at;
+  const date = value ? new Date(value) : new Date("2000-01-01T00:00:00.000Z");
+  return Number.isNaN(date.getTime())
+    ? new Date("2000-01-01T00:00:00.000Z")
+    : date;
+}
+
+function receiptKindLabel(kind: ReceiptKind) {
+  return kind === "submission" ? "Indsendelseskvittering" : kind === "approval" ? "Godkendelseskvittering" : "Afsluttende kvittering";
+}
+
+function receiptFilename(caseNumber: string, kind: ReceiptKind) {
+  const suffix = kind === "submission" ? "indsendelse" : kind === "approval" ? "godkendelse" : "afsluttet";
+  return `${caseNumber}-${suffix}.pdf`;
+}
+
+function wrapText(value: string, font: PDFFont, size: number, maxWidth: number) {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (!words.length) return ["Ikke oplyst"];
+  const lines: string[] = [];
+  let current = words[0];
+  for (const word of words.slice(1)) {
+    const candidate = `${current} ${word}`;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) current = candidate;
+    else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  lines.push(current);
+  return lines.flatMap((line) => splitLongLine(line, font, size, maxWidth));
+}
+
+function splitLongLine(value: string, font: PDFFont, size: number, maxWidth: number) {
+  if (font.widthOfTextAtSize(value, size) <= maxWidth) return [value];
+  const parts: string[] = [];
+  let current = "";
+  for (const character of value) {
+    const candidate = current + character;
+    if (current && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+      parts.push(current);
+      current = character;
+    } else current = candidate;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function pdfSafe(value: string) {
+  return value
+    .normalize("NFC")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/…/g, "...")
+    .replace(/[^\u0020-\u007E\u00A0-\u00FF]/g, "?");
+}
+
+async function sha256(bytes: Uint8Array) {
+  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}

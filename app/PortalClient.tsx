@@ -12,6 +12,7 @@ import {
   Clock3,
   Download,
   ExternalLink,
+  FileCheck2,
   FileText,
   Filter,
   FolderOpen,
@@ -25,7 +26,6 @@ import {
   Mail,
   Menu,
   MessageSquare,
-  MoreHorizontal,
   Paperclip,
   PencilLine,
   Plus,
@@ -34,19 +34,23 @@ import {
   Save,
   Search,
   Send,
-  Settings2,
   ShieldCheck,
   Trash2,
-  Upload,
   UserCheck,
-  UserRound,
   X,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type { Actor } from "../features/auth/types";
 import { ApplicationFormView } from "../features/application/ApplicationFormView";
+import {
+  formatDanishAmount,
+  getDisplaySystemName,
+  getFinanceTotal,
+  type ApplicationFormState,
+} from "../features/application/engine";
 import {
   CollectionEditButton,
   EditableText,
@@ -59,6 +63,22 @@ import {
   SpotlightTour,
   type SpotlightTourStep,
 } from "../features/onboarding/SpotlightTour";
+import {
+  useCaseCommentsAndActivity,
+  useCaseDetail,
+  type CaseDetail,
+  type CaseActivityEvent,
+  type CaseComment,
+  type CaseCommentVisibility,
+  type SubmitCaseCommentInput,
+} from "../features/case";
+import {
+  caseNumberFromNotification,
+  caseNumberFromPortalLink,
+  usePortalNotifications,
+  type PortalNotification,
+} from "../features/notifications/use-notifications";
+import { MailAdminPanel } from "../features/mail/MailAdminPanel";
 import {
   COMMENTABLE_APPLICATION_FIELDS,
   CONTENT_CATEGORY_LABELS,
@@ -154,11 +174,14 @@ function cx(...classes: Array<string | false | null | undefined>) {
 }
 
 export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
+  const router = useRouter();
   const [viewer, setViewer] = useState<Actor>(initialViewer);
   const role = viewer.role;
   const [cases, setCases] = useState<CaseRecord[]>([]);
+  const [casesLoaded, setCasesLoaded] = useState(false);
   const [view, setView] = useState<View>("home");
-  const [selectedId, setSelectedId] = useState<string | null>("ITA-001284");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [correctionCaseNumber, setCorrectionCaseNumber] = useState<string | null>(null);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -167,7 +190,11 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
   const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
+  const initialDeepLinkHandledRef = useRef(false);
   const workspace = useDemoWorkspace(viewer);
+  const notificationFeed = usePortalNotifications(
+    `${viewer.tenantId}:${viewer.subject}:${viewer.role}`,
+  );
 
   const visibleCases = useMemo(
     () => filterCasesForViewer(viewer, cases),
@@ -177,22 +204,30 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
     ? resolveAccessibleCase(viewer, selectedId, cases)
     : null;
 
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(null), 3600);
+  }, []);
+
   const reloadCases = useCallback(async () => {
     try {
       const response = await fetch("/api/cases", { cache: "no-store" });
       if (response.status === 401) {
-        window.location.assign("/login");
-        return;
+        router.replace("/login");
+        return null;
       }
       const payload = (await response.json()) as { cases?: CaseRecord[]; error?: string };
       if (!response.ok || !payload.cases) {
         throw new Error(payload.error || "Sagerne kunne ikke hentes.");
       }
       setCases(payload.cases);
+      setCasesLoaded(true);
+      return payload.cases;
     } catch (reason) {
       showToast((reason as Error).message);
+      return null;
     }
-  }, []);
+  }, [router, showToast]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void reloadCases(), 0);
@@ -213,30 +248,49 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
     }
   }, []);
 
-  function showToast(message: string) {
-    setToast(message);
-    window.setTimeout(() => setToast(null), 3600);
-  }
-
-  function navigate(next: View) {
+  const navigate = useCallback((next: View) => {
     if (!canAccessArea(role, next)) {
       showToast("Din aktuelle rolle har ikke adgang til dette område.");
       return;
     }
+    if (next === "application") setCorrectionCaseNumber(null);
     setView(next);
     setMobileMenu(false);
     setProfileOpen(false);
     setNotificationsOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  }, [role, showToast]);
 
-  function openCase(id: string) {
-    if (!resolveAccessibleCase(viewer, id, cases)) {
+  const openCase = useCallback((id: string, sourceCases: CaseRecord[] = cases) => {
+    if (!resolveAccessibleCase(viewer, id, sourceCases)) {
       showToast("Sagen findes ikke, eller du har ikke adgang til den.");
       return;
     }
     setSelectedId(id);
     navigate("detail");
+  }, [cases, navigate, showToast, viewer]);
+
+  useEffect(() => {
+    if (!casesLoaded || initialDeepLinkHandledRef.current) return;
+    const timeout = window.setTimeout(() => {
+      if (initialDeepLinkHandledRef.current) return;
+      initialDeepLinkHandledRef.current = true;
+      const caseNumber = caseNumberFromPortalLink(
+        `${window.location.pathname}${window.location.search}`,
+      );
+      if (caseNumber) openCase(caseNumber);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [casesLoaded, openCase]);
+
+  async function openNotification(notification: PortalNotification) {
+    const caseNumber = caseNumberFromNotification(notification);
+    if (!caseNumber) return;
+    if (notification.status === "unread") {
+      void notificationFeed.markRead(notification.id);
+    }
+    const refreshedCases = await reloadCases();
+    openCase(caseNumber, refreshedCases ?? cases);
   }
 
   async function changeRole(nextRole: WorkspaceRole) {
@@ -252,6 +306,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       }
       setViewer(payload.viewer);
       setCases([]);
+      setCasesLoaded(false);
       if (nextRole !== "admin") {
         setEditorMode(false);
         setEditorSelection(null);
@@ -260,6 +315,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       setNotificationsOpen(false);
       setMobileMenu(false);
       setSelectedId(null);
+      setCorrectionCaseNumber(null);
       if (!canAccessArea(nextRole, view) || view === "detail") {
         setView(defaultAreaForRole(nextRole));
       }
@@ -273,7 +329,8 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
-      window.location.assign("/login");
+      router.replace("/login");
+      router.refresh();
     }
   }
 
@@ -305,6 +362,10 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         mobileMenu={mobileMenu}
         profileOpen={profileOpen}
         notificationsOpen={notificationsOpen}
+        notifications={notificationFeed.notifications}
+        notificationCount={notificationFeed.unreadCount}
+        notificationsLoading={notificationFeed.loading}
+        notificationsError={notificationFeed.error}
         role={role}
         viewer={viewer}
         canSwitchRole={viewer.provider === "dev"}
@@ -319,6 +380,8 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
           setNotificationsOpen(!notificationsOpen);
           setProfileOpen(false);
         }}
+        onMarkNotificationsRead={() => void notificationFeed.markAllRead()}
+        onOpenNotification={(notification) => void openNotification(notification)}
         editorMode={editorMode}
         onToggleEditor={() => {
           setEditorSelection(null);
@@ -349,16 +412,35 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         ) : null}
         {view === "application" ? (
           <ApplicationFormView
-            onBack={() => navigate("cases")}
+            key={correctionCaseNumber ?? "new"}
+            correctionCaseNumber={correctionCaseNumber}
+            onBack={() => {
+              const caseNumber = correctionCaseNumber;
+              setCorrectionCaseNumber(null);
+              if (caseNumber) {
+                setSelectedId(caseNumber);
+                navigate("detail");
+              } else {
+                navigate("cases");
+              }
+            }}
             guidance={{
               intro: contentBody(workspace.content, "form.intro", "Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs."),
               catalog: contentBody(workspace.content, "form.catalog", "Resultatet viser samtidig, om systemet bruges i Kalundborg."),
               marketResearch: contentBody(workspace.content, "form.market-research", "Har du undersøgt, hvilke løsninger der bedst matcher behov, pris og kvalitet?"),
             }}
-            onSubmit={() => {
-              showToast("Ansøgningen er versionslåst og indsendt sikkert.");
-              void reloadCases();
-              navigate("cases");
+            onSubmit={(_snapshot, result) => {
+              showToast(result.mode === "correction" ? `Version ${result.versionNumber} er versionslåst og genindsendt sikkert.` : "Ansøgningen er versionslåst og indsendt sikkert.");
+              setCorrectionCaseNumber(null);
+              void reloadCases().then((refreshedCases) => {
+                if (result.mode === "correction") {
+                  setSelectedId(result.caseNumber);
+                  if (refreshedCases && resolveAccessibleCase(viewer, result.caseNumber, refreshedCases)) navigate("detail");
+                  else navigate("cases");
+                } else {
+                  navigate("cases");
+                }
+              });
             }}
             onToast={showToast}
           />
@@ -371,11 +453,24 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
             approval={workspace.approvals[selectedCase.id] ?? EMPTY_D_GITA_APPROVAL}
             fieldComments={workspace.fieldComments.filter((comment) => comment.caseId === selectedCase.id)}
             onBack={() => navigate(role === "user" ? "cases" : "consultant")}
-            onSaveApproval={(approval) => {
-              workspace.updateApproval(selectedCase.id, approval, viewer);
-              showToast("D-GITA-godkendelsen er gemt med auditspor.");
+            onStartCorrection={viewer.role === "user" && selectedCase.status === "changes_requested" ? () => {
+              navigate("application");
+              setCorrectionCaseNumber(selectedCase.id);
+            } : undefined}
+            onCaseChanged={async () => {
+              await reloadCases();
             }}
-            onAddFieldComment={(fieldId, fieldLabel, body) => {
+            onSaveApproval={async (approval) => {
+              try {
+                const saved = await workspace.updateApproval(selectedCase.id, approval, viewer);
+                if (saved) showToast("D-GITA-godkendelsen er gemt med auditspor.");
+                return saved;
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
+            }}
+            onAddFieldComment={async (fieldId, fieldLabel, body) => {
               const comment: FieldComment = {
                 id: crypto.randomUUID(),
                 caseId: selectedCase.id,
@@ -387,9 +482,16 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
                 createdAt: new Date().toISOString(),
                 visibility: "applicant",
               };
-              workspace.addFieldComment(comment, viewer);
-              showToast("Feltkommentaren er gemt og synlig for anmoderen.");
+              try {
+                const saved = await workspace.addFieldComment(comment, viewer);
+                if (saved) showToast("Feltkommentaren er gemt og synlig for anmoderen.");
+                return saved;
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
             }}
+            onToast={showToast}
           />
         ) : null}
         {view === "detail" && !selectedCase ? (
@@ -408,13 +510,41 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
           <AdminView
             content={workspace.content}
             viewer={viewer}
-            onUpdateContent={(entry) => workspace.updateContent(entry, viewer)}
-            onAddContent={(entry) => workspace.addContent(entry, viewer)}
-            onRemoveContent={(id) => workspace.removeContent(id, viewer)}
-            onResetContent={() => {
-              const contentReset = workspace.resetContent(viewer);
-              workspace.resetImages(viewer);
-              return contentReset;
+            onUpdateContent={async (entry) => {
+              try {
+                return await workspace.updateContent(entry, viewer);
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
+            }}
+            onAddContent={async (entry) => {
+              try {
+                return await workspace.addContent(entry, viewer);
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
+            }}
+            onRemoveContent={async (id) => {
+              try {
+                return await workspace.removeContent(id, viewer);
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
+            }}
+            onResetContent={async () => {
+              try {
+                const [contentReset, imagesReset] = await Promise.all([
+                  workspace.resetContent(viewer),
+                  workspace.resetImages(viewer),
+                ]);
+                return contentReset && imagesReset;
+              } catch (reason) {
+                showToast((reason as Error).message);
+                return false;
+              }
             }}
             onToast={showToast}
           />
@@ -445,19 +575,35 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         key={editorSelection ? `${editorSelection.kind}:${editorSelection.entry.id}` : "closed"}
         selection={role === "admin" && editorMode ? editorSelection : null}
         onClose={() => setEditorSelection(null)}
-        onSaveContent={(entry) => {
-          const saved = workspace.updateContent(entry, viewer);
-          if (saved) showToast(`“${entry.title}” er gemt og publiceret på siden.`);
-          return saved;
+        onSaveContent={async (entry) => {
+          try {
+            const saved = await workspace.updateContent(entry, viewer);
+            if (saved) showToast(`“${entry.title}” er gemt og publiceret på siden.`);
+            return saved;
+          } catch (reason) {
+            showToast((reason as Error).message);
+            return false;
+          }
         }}
-        onSaveImage={(entry) => {
-          const saved = workspace.updateImage(entry, viewer);
-          if (saved) showToast("Portalbilledet er erstattet.");
-          return saved;
+        onSaveImage={async (entry) => {
+          try {
+            const saved = await workspace.updateImage(entry, viewer);
+            if (saved) showToast("Portalbilledet er erstattet.");
+            return saved;
+          } catch (reason) {
+            showToast((reason as Error).message);
+            return false;
+          }
         }}
-        onResetImages={() => {
-          if (workspace.resetImages(viewer)) showToast("Standardbillederne er gendannet.");
-          setEditorSelection(null);
+        onResetImages={async () => {
+          try {
+            const reset = await workspace.resetImages(viewer);
+            if (reset) showToast("Standardbillederne er gendannet.");
+            return reset;
+          } catch (reason) {
+            showToast((reason as Error).message);
+            return false;
+          }
         }}
         onOpenLibrary={() => {
           setEditorSelection(null);
@@ -489,11 +635,17 @@ function Header({
   mobileMenu,
   profileOpen,
   notificationsOpen,
+  notifications,
+  notificationCount,
+  notificationsLoading,
+  notificationsError,
   onNavigate,
   onRoleChange,
   onMobileMenu,
   onProfile,
   onNotifications,
+  onMarkNotificationsRead,
+  onOpenNotification,
   editorMode,
   onToggleEditor,
   onTutorial,
@@ -506,11 +658,17 @@ function Header({
   mobileMenu: boolean;
   profileOpen: boolean;
   notificationsOpen: boolean;
+  notifications: PortalNotification[];
+  notificationCount: number;
+  notificationsLoading: boolean;
+  notificationsError: string | null;
   onNavigate: (view: View) => void;
   onRoleChange: (role: WorkspaceRole) => void;
   onMobileMenu: () => void;
   onProfile: () => void;
   onNotifications: () => void;
+  onMarkNotificationsRead: () => void;
+  onOpenNotification: (notification: PortalNotification) => void;
   editorMode: boolean;
   onToggleEditor: () => void;
   onTutorial: () => void;
@@ -567,8 +725,9 @@ function Header({
           <div className="header-popover-anchor">
             <button className="header-icon-button" data-tour="notifications" type="button" aria-label="Notifikationer" onClick={onNotifications}>
               <Bell size={20} />
+              {notificationCount > 0 ? <span>{Math.min(notificationCount, 99)}</span> : null}
             </button>
-            {notificationsOpen ? <NotificationPanel /> : null}
+            {notificationsOpen ? <NotificationPanel notifications={notifications} unreadCount={notificationCount} loading={notificationsLoading} error={notificationsError} onMarkAllRead={onMarkNotificationsRead} onOpen={onOpenNotification} /> : null}
           </div>
           <div className="header-popover-anchor profile-anchor">
             <button className="account-button" data-tour="profile" type="button" onClick={onProfile}>
@@ -579,11 +738,9 @@ function Header({
             {profileOpen ? (
               <div className="header-popover profile-menu">
                 <div className="profile-menu-head"><span>{viewer.initials}</span><div><strong>{viewer.displayName}</strong><small>{ROLE_LABELS[role]}{viewer.provider === "dev" ? " · testtilstand" : ""}</small></div></div>
-                <button type="button" disabled title="Profiladministration kommer med kommunal SSO"><UserRound size={17} /> Min profil</button>
-                {capabilitiesFor(role).createApplications ? <button type="button" disabled title="PDF-kvitteringer aktiveres i kvitteringsfasen"><ReceiptText size={17} /> Mine kvitteringer</button> : null}
+                {capabilitiesFor(role).createApplications ? <button type="button" onClick={() => onNavigate("cases")}><ReceiptText size={17} /> Mine kvitteringer</button> : null}
                 <button type="button" onClick={onTutorial}><BookOpen size={17} /> Tutorial</button>
                 {role === "admin" ? <button type="button" onClick={onToggleEditor}><PencilLine size={17} /> Editor mode: {editorMode ? "aktiv" : "slået fra"}</button> : null}
-                <button type="button" disabled title="Indstillinger kommer med kommunal SSO"><Settings2 size={17} /> Indstillinger</button>
                 <button type="button" onClick={onLogout}><LogOut size={17} /> Log ud</button>
               </div>
             ) : null}
@@ -597,13 +754,43 @@ function Header({
   );
 }
 
-function NotificationPanel() {
+function NotificationPanel({
+  notifications,
+  unreadCount,
+  loading,
+  error,
+  onMarkAllRead,
+  onOpen,
+}: {
+  notifications: PortalNotification[];
+  unreadCount: number;
+  loading: boolean;
+  error: string | null;
+  onMarkAllRead: () => void;
+  onOpen: (notification: PortalNotification) => void;
+}) {
   return (
     <div className="header-popover notification-panel">
-      <div className="popover-title"><strong>Notifikationer</strong><span>Ingen nye</span></div>
-      <div className="notice-empty"><Bell size={18} /><p>Nye statushændelser vises her, når notifikationsmotoren er tilsluttet.</p></div>
+      <div className="popover-title"><strong>Notifikationer</strong>{unreadCount > 0 ? <button type="button" onClick={onMarkAllRead}>Markér alle som læst</button> : <span>Ingen nye</span>}</div>
+      {loading ? <div className="notice-empty"><Clock3 size={18} /><p>Henter notifikationer…</p></div> : null}
+      {error ? <div className="notice-empty"><Info size={18} /><p>{error}</p></div> : null}
+      {!loading && !error && notifications.length === 0 ? <div className="notice-empty"><Bell size={18} /><p>Der er ingen notifikationer endnu.</p></div> : null}
+      {!loading ? notifications.map((notification) => {
+        const Icon = notification.eventType.includes("submitted") ? FileCheck2 : notification.eventType.includes("mail") ? Mail : Info;
+        const content = <><span><Icon size={18} /></span><div><strong>{notification.title}</strong><p>{notification.body}</p><small>{formatNotificationTime(notification.createdAt)}</small></div></>;
+        return caseNumberFromNotification(notification)
+          ? <button className={cx("notice", notification.status === "unread" && "unread")} type="button" key={notification.id} onClick={() => onOpen(notification)}>{content}</button>
+          : <div className={cx("notice", notification.status === "unread" && "unread")} key={notification.id}>{content}</div>;
+      }) : null}
     </div>
   );
+}
+
+function formatNotificationTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 function HomeView({
@@ -685,7 +872,7 @@ function HomeView({
           <ResourceLink content={content} titleId="home.resources.municipality.title" bodyId="home.resources.municipality.body" title="Info fra din kommune" text="Særlige krav og information fra Kalundborg." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
           <ResourceLink content={content} titleId="home.resources.changelog.title" bodyId="home.resources.changelog.body" title="Ny funktionalitet" text="Se de seneste ændringer i portalen." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
         </div>
-        <div className="operation-strip"><span className="operation-dot" /><strong>Normal drift</strong><span>Alle centrale tjenester fungerer</span><button type="button">Se driftstatus <ExternalLink size={15} /></button></div>
+        <div className="operation-strip"><span className="operation-dot" /><strong>Portal klar</strong><span>Databasens og mailkøens status vises for administratorer under Integrationer og Mail &amp; kvitteringer.</span></div>
       </section>
     </div>
   );
@@ -745,22 +932,41 @@ function ConsultantView({ rows: availableRows, onOpen }: { rows: CaseRecord[]; o
     const q = query.toLowerCase();
     return (!q || `${item.id} ${item.system} ${item.applicant}`.toLowerCase().includes(q)) && (phase === "Alle faser" || item.phase === phase);
   }), [availableRows, query, phase]);
+  const stats = useMemo(() => ({
+    submitted: availableRows.filter((item) => item.phase === "Indsendt").length,
+    reviewing: availableRows.filter((item) => item.phase === "Under behandling").length,
+    awaitingLeader: availableRows.filter((item) => item.approval === "Afventer").length,
+    closed: availableRows.filter((item) => item.phase === "Afsluttet").length,
+  }), [availableRows]);
+  const actionCount = new Set(availableRows.filter((item) => item.phase === "Indsendt" || item.approval === "Afventer").map((item) => item.id)).size;
+
+  function exportRows() {
+    const header = ["Sagsnummer", "System", "Fase", "Anmoder", "Kommune", "Konsulent", "Ledergodkendelse", "Oprettet", "Ændret"];
+    const data = rows.map((item) => [item.id, item.system, item.phase, item.applicant, item.municipality, item.consultant, item.approval, item.created, item.changed]);
+    const csv = `\uFEFF${[header, ...data].map((line) => line.map(csvCell).join(";")).join("\r\n")}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dgita-sager-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="portal-page page-width">
       <PageIntro eyebrow="D-GITA Konsulent" title="Alle sager" text="Visiter, prioritér og følg ansøgninger på tværs af fase, godkendelsesstatus, kommune og ansvarlig konsulent.">
-        <div className="queue-count"><span>7</span><div><small>Kræver handling</small><strong>I din arbejdskø</strong></div></div>
+        <div className="queue-count"><span>{actionCount}</span><div><small>Kræver handling</small><strong>I din arbejdskø</strong></div></div>
       </PageIntro>
 
       <section className="consultant-summary" aria-label="Sagsstatus">
-        <SummaryStat value="2" label="Indsendt" detail="afventer visitering" />
-        <SummaryStat value="1" label="Under behandling" detail="WSUS klient" />
-        <SummaryStat value="2" label="Afventer leder" detail="godkendelsesmail sendt" />
-        <SummaryStat value="3" label="Afsluttet" detail="seneste 90 dage" />
+        <SummaryStat value={String(stats.submitted)} label="Indsendt" detail="afventer visitering" />
+        <SummaryStat value={String(stats.reviewing)} label="Under behandling" detail="aktive sager" />
+        <SummaryStat value={String(stats.awaitingLeader)} label="Afventer leder" detail="åbne godkendelser" />
+        <SummaryStat value={String(stats.closed)} label="Afsluttet" detail="alle gemte sager" />
       </section>
 
       <section className="records-section consultant-records">
-        <div className="consultant-filter-title"><div><span className="section-label dark">Sagsliste</span><h2>Aktive ansøgninger</h2></div><button className="line-button" type="button"><Download size={17} /> Eksportér</button></div>
+        <div className="consultant-filter-title"><div><span className="section-label dark">Sagsliste</span><h2>Aktive ansøgninger</h2></div><button className="line-button" type="button" disabled={rows.length === 0} onClick={exportRows}><Download size={17} /> Eksportér CSV</button></div>
         <div className="records-toolbar">
           <label className="clean-search"><Search size={18} /><input aria-label="Søg i alle sager" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Sagsnummer, system eller anmoder" /></label>
           <label className="clean-select"><Filter size={17} /><select value={phase} onChange={(event) => setPhase(event.target.value)}><option>Alle faser</option><option>Kladde</option><option>Indsendt</option><option>Under behandling</option><option>Afsluttet</option></select><ChevronDown size={16} /></label>
@@ -771,6 +977,10 @@ function ConsultantView({ rows: availableRows, onOpen }: { rows: CaseRecord[]; o
   );
 }
 
+function csvCell(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
 function SummaryStat({ value, label, detail }: { value: string; label: string; detail: string }) {
   return <article><strong>{value}</strong><div><span>{label}</span><small>{detail}</small></div></article>;
 }
@@ -779,7 +989,7 @@ function RecordsTable({ rows, onOpen, applicantMode }: { rows: CaseRecord[]; onO
   return (
     <div className="clean-table-wrap">
       <table className="clean-table">
-        <thead><tr><th>Sag</th><th>Fase</th><th>Oprettet</th><th>Ændret</th><th>{applicantMode ? "D-GITA Konsulent" : "Anmoder"}</th><th>Leder godkendt</th><th aria-label="Filer" /><th aria-label="Åbn" /></tr></thead>
+        <thead><tr><th>Sag</th><th>Fase</th><th>Oprettet</th><th>Ændret</th><th>{applicantMode ? "D-GITA Konsulent" : "Anmoder"}</th><th>Leder godkendt</th><th aria-label="Åbn" /></tr></thead>
         <tbody>{rows.map((item) => (
           <tr key={item.id} onClick={() => onOpen(item.id)}>
             <td><div className="record-name"><span>{item.system.slice(0, 2).toUpperCase()}</span><div><strong>{item.system}</strong><small>{item.id} · {item.municipality}</small></div></div></td>
@@ -788,7 +998,6 @@ function RecordsTable({ rows, onOpen, applicantMode }: { rows: CaseRecord[]; onO
             <td>{item.changed}</td>
             <td>{applicantMode ? item.consultant : item.applicant}</td>
             <td><ApprovalTag approval={item.approval} /></td>
-            <td><button className="table-action" type="button" aria-label={`Se filer for ${item.id}`}><FolderOpen size={18} /></button></td>
             <td><button className="table-action" type="button" aria-label={`Åbn ${item.id}`}><ArrowRight size={18} /></button></td>
           </tr>
         ))}</tbody>
@@ -879,40 +1088,97 @@ function CaseDetail({
   approval,
   fieldComments,
   onBack,
+  onStartCorrection,
+  onCaseChanged,
   onSaveApproval,
   onAddFieldComment,
+  onToast,
 }: {
   item: CaseRecord;
   viewer: WorkspaceViewer;
   approval: DgitaApproval;
   fieldComments: FieldComment[];
   onBack: () => void;
-  onSaveApproval: (approval: DgitaApproval) => void;
-  onAddFieldComment: (fieldId: string, fieldLabel: string, body: string) => void;
+  onStartCorrection?: () => void;
+  onCaseChanged: () => Promise<void>;
+  onSaveApproval: (approval: DgitaApproval) => Promise<boolean>;
+  onAddFieldComment: (fieldId: string, fieldLabel: string, body: string) => Promise<boolean>;
+  onToast: (message: string) => void;
 }) {
   const [tab, setTab] = useState("overblik");
+  const [statusComposerOpen, setStatusComposerOpen] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [mailSending, setMailSending] = useState(false);
+  const [approvalRequesting, setApprovalRequesting] = useState(false);
   const canProcess = capabilitiesFor(viewer.role).processApplications;
+  const caseFeed = useCaseCommentsAndActivity(item.id);
+  const caseDetail = useCaseDetail(item.id);
   const tabs = ["overblik", "ansøgning", "filer", "kommentarer", ...(canProcess ? ["dgita"] : []), "historik"];
+
+  async function queueStatusMessage() {
+    const message = statusMessage.trim();
+    if (!message || mailSending) return;
+    setMailSending(true);
+    try {
+      const response = await fetch(`/api/cases/${encodeURIComponent(item.id)}/mail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, idempotencyKey: crypto.randomUUID() }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Statusmailen kunne ikke sættes i kø.");
+      setStatusMessage("");
+      setStatusComposerOpen(false);
+      onToast("Statusmailen er sat i den sikre Outlook-kø.");
+    } catch (reason) {
+      onToast((reason as Error).message);
+    } finally {
+      setMailSending(false);
+    }
+  }
+
+  async function requestLeaderApproval() {
+    if (approvalRequesting) return;
+    setApprovalRequesting(true);
+    try {
+      const response = await fetch(`/api/cases/${encodeURIComponent(item.id)}/approval-request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const payload = await response.json() as { approverName?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error || "Godkendelsen kunne ikke oprettes.");
+      onToast(`Godkendelsen er sat i mailkø til ${payload.approverName ?? item.leader}.`);
+      await Promise.all([caseFeed.refresh(), caseDetail.refetch(), onCaseChanged()]);
+    } catch (reason) {
+      onToast((reason as Error).message);
+    } finally {
+      setApprovalRequesting(false);
+    }
+  }
+
   return (
     <div className="detail-page page-width">
       <button className="back-text" type="button" onClick={onBack}><ArrowLeft size={18} /> {viewer.role === "user" ? "Mine ansøgninger" : "Alle sager"}</button>
       <section className="case-title-block">
         <div><span className="section-label dark">{item.id} · {item.municipality} Kommune</span><h1>{item.system}</h1><div className="case-title-meta"><PhaseTag phase={item.phase} /><span>Ændret {item.changed}</span></div></div>
-        <div><button className="line-button" type="button" disabled title="PDF-kvitteringer aktiveres i kvitteringsfasen"><Download size={17} /> Hent kvittering</button>{canProcess ? <button className="solid-button" type="button" disabled title="Outlook-afsendelse aktiveres efter Microsoft Graph-opsætning"><Mail size={17} /> Send statusmail</button> : null}</div>
+        <div>{item.receiptAvailable ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=submission`}><Download size={17} /> Indsendelseskvittering</a> : <button className="line-button" type="button" disabled title="Kvitteringen oprettes, når ansøgningen er indsendt"><Download size={17} /> Indsendelseskvittering</button>}{item.approval === "Godkendt" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=approval`}><Download size={17} /> Godkendelseskvittering</a> : null}{item.phase === "Afsluttet" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=final`}><Download size={17} /> Slutkvittering</a> : null}{onStartCorrection ? <button className="solid-button green" type="button" onClick={onStartCorrection}><PencilLine size={17} /> Ret og genindsend</button> : null}{canProcess ? <button className="solid-button" type="button" onClick={() => setStatusComposerOpen((current) => !current)}><Mail size={17} /> Send statusmail</button> : null}</div>
       </section>
+
+      {statusComposerOpen ? <section className="status-mail-composer" aria-label="Sæt statusmail i kø"><div><span className="section-label dark">Outlook-status</span><h2>Skriv status til {item.applicant}</h2><p>Mailen valideres og lægges i den idempotente mailkø. Den afsendes først, når Microsoft Graph er konfigureret.</p></div><textarea className="clean-input" rows={4} value={statusMessage} onChange={(event) => setStatusMessage(event.target.value)} placeholder="Skriv en kort, konkret status på sagen" maxLength={8000} /><div><button className="line-button" type="button" onClick={() => setStatusComposerOpen(false)}>Annuller</button><button className="solid-button" type="button" disabled={!statusMessage.trim() || mailSending} onClick={() => void queueStatusMessage()}><Send size={16} /> {mailSending ? "Gemmer…" : "Sæt i mailkø"}</button></div></section> : null}
 
       <CaseJourney active={item.phase} />
 
       <nav className="detail-tabs" aria-label="Sagens indhold">
-        {tabs.map((name) => <button className={tab === name ? "active" : ""} type="button" key={name} onClick={() => setTab(name)}>{name === "overblik" ? <LayoutGrid size={17} /> : name === "ansøgning" ? <FileText size={17} /> : name === "filer" ? <Paperclip size={17} /> : name === "kommentarer" ? <MessageSquare size={17} /> : name === "dgita" ? <ShieldCheck size={17} /> : <History size={17} />}{name === "dgita" ? "D-GITA godkendelse" : name}<span>{name === "kommentarer" ? String(fieldComments.length) : ""}</span></button>)}
+        {tabs.map((name) => <button className={tab === name ? "active" : ""} type="button" key={name} onClick={() => setTab(name)}>{name === "overblik" ? <LayoutGrid size={17} /> : name === "ansøgning" ? <FileText size={17} /> : name === "filer" ? <Paperclip size={17} /> : name === "kommentarer" ? <MessageSquare size={17} /> : name === "dgita" ? <ShieldCheck size={17} /> : <History size={17} />}{name === "dgita" ? "D-GITA godkendelse" : name}<span>{name === "kommentarer" ? String(caseFeed.comments.length) : ""}</span></button>)}
       </nav>
 
-      {tab === "overblik" ? <CaseOverview item={item} /> : null}
-      {tab === "ansøgning" ? <ApplicationSnapshot canComment={canProcess} comments={fieldComments} onAddComment={onAddFieldComment} /> : null}
+      {tab === "overblik" ? caseDetail.detail ? <CaseOverview item={item} detail={caseDetail.detail} canRequestApproval={canProcess && Boolean(item.receiptAvailable)} approvalRequesting={approvalRequesting} onRequestApproval={() => void requestLeaderApproval()} /> : <CaseDetailDataState loading={caseDetail.isLoading} error={caseDetail.error?.message ?? null} onRetry={() => void caseDetail.refetch()} /> : null}
+      {tab === "ansøgning" ? caseDetail.detail ? <ApplicationSnapshot detail={caseDetail.detail} canComment={canProcess} comments={fieldComments} onAddComment={onAddFieldComment} /> : <CaseDetailDataState loading={caseDetail.isLoading} error={caseDetail.error?.message ?? null} onRetry={() => void caseDetail.refetch()} /> : null}
       {tab === "filer" ? <FileList caseId={item.id} /> : null}
-      {tab === "kommentarer" ? <Comments /> : null}
+      {tab === "kommentarer" ? <Comments comments={caseFeed.comments} loading={caseFeed.isLoading} submitting={caseFeed.isSubmitting} error={caseFeed.error?.message ?? null} canInternal={canProcess} onSubmit={caseFeed.submitComment} /> : null}
       {tab === "dgita" && canProcess ? <DgitaApprovalPanel value={approval} onSave={onSaveApproval} /> : null}
-      {tab === "historik" ? <AuditTrail item={item} /> : null}
+      {tab === "historik" ? <AuditTrail events={caseFeed.events} loading={caseFeed.isLoading} error={caseFeed.error?.message ?? null} /> : null}
     </div>
   );
 }
@@ -923,15 +1189,21 @@ function CaseJourney({ active }: { active: Phase }) {
   return <div className="case-journey">{steps.map((step, index) => <div className={cx(index < activeIndex && "done", index === activeIndex && "current")} key={step}><span>{index < activeIndex ? <Check size={15} /> : index + 1}</span><strong>{step}</strong>{index < steps.length - 1 ? <i /> : null}</div>)}</div>;
 }
 
-function CaseOverview({ item }: { item: CaseRecord }) {
+function CaseOverview({ item, detail, canRequestApproval, approvalRequesting, onRequestApproval }: { item: CaseRecord; detail: CaseDetail; canRequestApproval: boolean; approvalRequesting: boolean; onRequestApproval: () => void }) {
+  const snapshot = detail.snapshot;
+  const metadata = detail.case;
+  const architectureReady = snapshot.hasArchitecture === "ja";
+  const marketReady = snapshot.marketResearch === "ja";
+  const implementation = [formatCaseDate(snapshot.startDate), formatCaseDate(snapshot.endDate)].filter(Boolean).join(" – ") || "Ikke oplyst";
+  const leader = snapshot.approvingLeader || item.leader || "Ikke valgt";
   return <div className="case-content-grid"><div className="case-primary">
-    <section className="attention-block"><span><Info size={22} /></span><div><small>Opmærksomhedspunkt</small><h2>Arkitekturtegning mangler</h2><p>Der er endnu ikke indhentet en arkitekturtegning og beskrivelse af IT-systemets sammenhænge med andre systemer.</p></div><button className="solid-button" type="button" disabled title="Bilag uploades fra ansøgningsformularen"><Upload size={17} /> Upload bilag</button></section>
-    <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Ansøgningen</span><h2>Nøgleoplysninger</h2></div><div className="facts-grid"><Fact label="Anskaffelsesform" value="DIGIT udbud/aftale" /><Fact label="Ansvarlig organisation" value="ORG – Digitalisering og IT" /><Fact label="Dataklassifikation" value="Fortrolige oplysninger" /><Fact label="Antal brugere" value="500–100.000" /><Fact label="Implementering" value="18.09 – 09.10.2026" /><Fact label="Samlet finansiering" value="300,00 kr." /></div></section>
-    <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Faglig vurdering</span><h2>To centrale kontroller</h2></div><div className="assessment-list"><div className="assessment ok"><CheckCircle2 size={21} /><div><strong>Markedsafdækning gennemført</strong><p>Spørgsmål 26 er besvaret ja.</p></div></div><div className="assessment missing"><XCircle size={21} /><div><strong>Arkitekturbeskrivelse mangler</strong><p>Spørgsmål 50 er besvaret nej.</p></div></div></div></section>
+    {!architectureReady ? <section className="attention-block"><span><Info size={22} /></span><div><small>Opmærksomhedspunkt</small><h2>Arkitekturtegning mangler</h2><p>Ansøgeren har oplyst, at der endnu ikke er indhentet en arkitekturtegning. Brug den feltvise dialog til at bede om dokumentation; et afvist beslutningsgrundlag kan rettes og indsendes som en ny version.</p></div></section> : null}
+    <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Ansøgningen</span><h2>Nøgleoplysninger</h2></div><div className="facts-grid"><Fact label="Anskaffelsesform" value={snapshot.acquisitionMethod || snapshot.acquisitionType} /><Fact label="Ansvarlig organisation" value={snapshot.responsibleOrganization || snapshot.department} /><Fact label="Dataklassifikation" value={snapshot.personalData === "ja" ? snapshot.dataClassification : "Ingen personoplysninger"} /><Fact label="Antal brugere" value={snapshot.implementationUsers || "Ikke oplyst"} /><Fact label="Implementering" value={implementation} /><Fact label="Samlet finansiering" value={`${formatDanishAmount(getFinanceTotal(snapshot))} kr.`} /></div></section>
+    <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Faglig vurdering</span><h2>To centrale kontroller</h2></div><div className="assessment-list"><div className={cx("assessment", marketReady ? "ok" : "missing")}>{marketReady ? <CheckCircle2 size={21} /> : <XCircle size={21} />}<div><strong>{marketReady ? "Markedsafdækning gennemført" : "Markedsafdækning ikke gennemført"}</strong><p>Spørgsmål 26 er besvaret {marketReady ? "ja" : "nej"}.</p></div></div><div className={cx("assessment", architectureReady ? "ok" : "missing")}>{architectureReady ? <CheckCircle2 size={21} /> : <XCircle size={21} />}<div><strong>{architectureReady ? "Arkitekturbeskrivelse registreret" : "Arkitekturbeskrivelse mangler"}</strong><p>Spørgsmål 50 er besvaret {architectureReady ? "ja" : "nej"}.</p></div></div></div></section>
   </div><aside className="case-aside">
-    <section><span className="section-label dark">Ansvar</span><h3>Personer på sagen</h3><Person name={item.applicant} role="Anmoder" initials="PV" /><Person name={item.consultant} role="D-GITA Konsulent" initials="PB" /><Person name={item.leader} role="Godkendende leder" initials="PB" /></section>
-    <section><span className="section-label dark">Godkendelse</span><h3>Leder godkendt</h3><ApprovalTag approval={item.approval} /><p>Beslutningen er registreret på den indsendte version af ansøgningen.</p><button className="line-button full" type="button" disabled title="Mailafsendelse aktiveres efter Microsoft Graph-opsætning"><Mail size={17} /> Gensend godkendelsesmail</button></section>
-    <section><span className="section-label dark">Sagsdata</span><dl><div><dt>Oprettet</dt><dd>{item.created}</dd></div><div><dt>Ændret</dt><dd>{item.changed}</dd></div><div><dt>Kommune</dt><dd>{item.municipality}</dd></div><div><dt>ESDH</dt><dd><button type="button" disabled title="ESDH-integrationen er ikke tilsluttet endnu">Åbn reference</button></dd></div></dl></section>
+    <section><span className="section-label dark">Ansvar</span><h3>Personer på sagen</h3><Person name={metadata.applicantName} role="Anmoder" initials={personInitials(metadata.applicantName)} /><Person name={metadata.consultantName || "Ikke tildelt"} role="D-GITA Konsulent" initials={personInitials(metadata.consultantName)} /><Person name={leader} role="Godkendende leder" initials={personInitials(leader)} /></section>
+    <section><span className="section-label dark">Godkendelse</span><h3>Ledergodkendelse</h3><ApprovalTag approval={item.approval} /><p>En beslutning bindes altid til den konkrete, indsendte version af ansøgningen.</p>{canRequestApproval ? <button className="line-button full" type="button" disabled={approvalRequesting} onClick={onRequestApproval}><Mail size={17} /> {approvalRequesting ? "Opretter…" : item.approval === "Afventer" ? "Send nyt godkendelseslink" : "Send til ledergodkendelse"}</button> : null}</section>
+    <section><span className="section-label dark">Sagsdata</span><dl><div><dt>Version</dt><dd>{metadata.versionNumber || "Kladde"}</dd></div><div><dt>Oprettet</dt><dd>{formatFeedDate(metadata.createdAt)}</dd></div><div><dt>Ændret</dt><dd>{formatFeedDate(metadata.updatedAt)}</dd></div><div><dt>Kommune</dt><dd>{item.municipality}</dd></div><div><dt>ESDH</dt><dd>{snapshot.esdhContractUrl && isSafeContentUrl(snapshot.esdhContractUrl) ? <a href={snapshot.esdhContractUrl} target="_blank" rel="noreferrer">Åbn reference</a> : "Ikke angivet"}</dd></div></dl></section>
   </aside></div>;
 }
 
@@ -940,60 +1212,115 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 function Person({ name, role, initials }: { name: string; role: string; initials: string }) {
-  return <div className="case-person"><span>{initials}</span><div><strong>{name}</strong><small>{role}</small></div><button type="button" disabled title="Kontaktoplysninger tilsluttes med kommunal SSO" aria-label={`Mail til ${name} er ikke tilgængelig endnu`}><Mail size={15} /></button></div>;
+  return <div className="case-person"><span>{initials}</span><div><strong>{name}</strong><small>{role}</small></div></div>;
 }
 
 function ApplicationSnapshot({
+  detail,
   canComment,
   comments,
   onAddComment,
 }: {
+  detail: CaseDetail;
   canComment: boolean;
   comments: FieldComment[];
-  onAddComment: (fieldId: string, fieldLabel: string, body: string) => void;
+  onAddComment: (fieldId: string, fieldLabel: string, body: string) => Promise<boolean>;
 }) {
-  const sections = ["Generelle oplysninger", "Systemoplysninger", "System og anskaffelsesform", "Værdi for kommunen", "Investering", "Risikovurdering", "Databehandleraftale", "Implementering", "IT-krav", "Øvrige"];
-  return <div className="snapshot-stack"><section className="snapshot plain-section"><div className="plain-heading"><span className="section-label dark">Indsendt version</span><h2>Ansøgningens indhold</h2><span className="locked"><LockKeyhole size={15} /> Version 3 · låst</span></div>{sections.map((section, index) => <button type="button" key={section}><span>{String(index + 1).padStart(2, "0")}</span><strong>{section}</strong><small>{index === 8 ? "1 opmærksomhedspunkt" : "Udfyldt"}</small><ChevronRight size={18} /></button>)}</section><FieldCommentsPanel canComment={canComment} comments={comments} onAddComment={onAddComment} /></div>;
+  const [openSection, setOpenSection] = useState(0);
+  const sections = applicationSnapshotSections(detail.snapshot);
+  const selectedSection = sections[openSection] ?? sections[0];
+  return <div className="snapshot-stack"><section className="snapshot plain-section"><div className="plain-heading"><span className="section-label dark">{detail.case.versionNumber > 0 ? "Indsendt version" : "Aktuel kladde"}</span><h2>Ansøgningens indhold</h2><span className="locked"><LockKeyhole size={15} /> {detail.case.versionNumber > 0 ? `Version ${detail.case.versionNumber} · låst` : "Kladde · kan redigeres"}</span></div>{sections.map((section, index) => <button className={openSection === index ? "open" : ""} type="button" key={section.title} aria-expanded={openSection === index} onClick={() => setOpenSection(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{section.title}</strong><small>{section.rows.some((row) => !row.value || row.value === "Ikke oplyst") ? "Kontrollér svar" : "Udfyldt"}</small><ChevronRight size={18} /></button>)}{selectedSection ? <div className="snapshot-answer-grid" aria-live="polite"><h3>{selectedSection.title}</h3>{selectedSection.rows.map((row) => <Fact key={row.label} label={row.label} value={row.value || "Ikke oplyst"} />)}</div> : null}</section><FieldCommentsPanel snapshot={detail.snapshot} canComment={canComment} comments={comments} onAddComment={onAddComment} /></div>;
 }
 
-const APPLICATION_FIELD_VALUES: Record<string, string> = {
-  system: "WSUS klient",
-  purpose: "Sikker og ensartet opdatering af kommunens Windows-klienter.",
-  users: "500–100.000",
-  "personal-data": "Ja · fortrolige oplysninger",
-  finance: "300,00 kr.",
-};
-
 function FieldCommentsPanel({
+  snapshot,
   canComment,
   comments,
   onAddComment,
 }: {
+  snapshot: ApplicationFormState;
   canComment: boolean;
   comments: FieldComment[];
-  onAddComment: (fieldId: string, fieldLabel: string, body: string) => void;
+  onAddComment: (fieldId: string, fieldLabel: string, body: string) => Promise<boolean>;
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savingField, setSavingField] = useState<string | null>(null);
+  const fieldValues = applicationFieldValues(snapshot);
+
+  async function saveComment(fieldId: string, fieldLabel: string, body: string) {
+    setSavingField(fieldId);
+    try {
+      if (await onAddComment(fieldId, fieldLabel, body)) {
+        setDrafts((current) => ({ ...current, [fieldId]: "" }));
+      }
+    } finally {
+      setSavingField(null);
+    }
+  }
 
   return <section className="plain-section field-comments-section"><div className="plain-heading"><span className="section-label dark">Feltvis dialog</span><h2>Kommentarer til ansøgningens felter</h2></div><p className="section-lead">D-GITA-konsulenten kan knytte en kommentar til et konkret svar. Delte kommentarer kan ses af anmoderen, mens interne noter ligger separat under D-GITA-godkendelsen.</p><div className="field-comment-list">{COMMENTABLE_APPLICATION_FIELDS.map((field) => {
     const fieldComments = comments.filter((comment) => comment.fieldId === field.id && comment.visibility === "applicant");
     const draft = drafts[field.id] ?? "";
-    return <article className="field-comment-row" key={field.id}><div className="field-comment-answer"><small>{field.label}</small><strong>{APPLICATION_FIELD_VALUES[field.id]}</strong></div>{fieldComments.length ? <div className="saved-field-comments">{fieldComments.map((comment) => <div key={comment.id}><MessageSquare size={15} /><p>{comment.body}</p><small>{comment.authorName} · {new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(new Date(comment.createdAt))}</small></div>)}</div> : <p className="no-field-comment">Ingen kommentarer til feltet.</p>}{canComment ? <div className="field-comment-composer"><textarea rows={2} value={draft} onChange={(event) => setDrafts((current) => ({ ...current, [field.id]: event.target.value }))} placeholder={`Kommentér feltet “${field.label}”`} /><button className="line-button" type="button" disabled={!draft.trim()} onClick={() => { onAddComment(field.id, field.label, draft.trim()); setDrafts((current) => ({ ...current, [field.id]: "" })); }}><Send size={15} /> Gem kommentar</button></div> : null}</article>;
+    return <article className="field-comment-row" key={field.id}><div className="field-comment-answer"><small>{field.label}</small><strong>{fieldValues[field.id] || "Ikke oplyst"}</strong></div>{fieldComments.length ? <div className="saved-field-comments">{fieldComments.map((comment) => <div key={comment.id}><MessageSquare size={15} /><p>{comment.body}</p><small>{comment.authorName} · {new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(new Date(comment.createdAt))}</small></div>)}</div> : <p className="no-field-comment">Ingen kommentarer til feltet.</p>}{canComment ? <div className="field-comment-composer"><textarea rows={2} value={draft} onChange={(event) => setDrafts((current) => ({ ...current, [field.id]: event.target.value }))} placeholder={`Kommentér feltet “${field.label}”`} /><button className="line-button" type="button" disabled={!draft.trim() || savingField !== null} onClick={() => void saveComment(field.id, field.label, draft.trim())}><Send size={15} /> {savingField === field.id ? "Gemmer…" : "Gem kommentar"}</button></div> : null}</article>;
   })}</div></section>;
+}
+
+function CaseDetailDataState({ loading, error, onRetry }: { loading: boolean; error: string | null; onRetry: () => void }) {
+  return <section className="plain-section case-data-state">{loading ? <p className="section-lead">Henter de gemte formulardata…</p> : <><p className="field-error">{error || "Sagsdata kunne ikke hentes."}</p><button className="line-button" type="button" onClick={onRetry}>Prøv igen</button></>}</section>;
+}
+
+function applicationFieldValues(snapshot: ApplicationFormState): Record<string, string> {
+  return {
+    system: getDisplaySystemName(snapshot),
+    purpose: snapshot.purpose,
+    users: snapshot.implementationUsers,
+    "personal-data": snapshot.personalData === "ja" ? `Ja · ${snapshot.dataClassification || "klassifikation ikke angivet"}` : "Nej",
+    finance: `${formatDanishAmount(getFinanceTotal(snapshot))} kr.`,
+  };
+}
+
+function applicationSnapshotSections(snapshot: ApplicationFormState) {
+  const yesNo = (value: "ja" | "nej") => value === "ja" ? "Ja" : "Nej";
+  const list = (values: string[]) => values.length ? values.join(", ") : "Ikke oplyst";
+  const files = (kind: keyof ApplicationFormState["attachments"]) => snapshot.attachments[kind].map((file) => file.name).join(", ") || "Ingen bilag";
+  return [
+    { title: "Generelle oplysninger", rows: [{ label: "System", value: getDisplaySystemName(snapshot) }, { label: "Kontaktperson", value: snapshot.contactPerson }, { label: "Afdeling", value: snapshot.department }, { label: "Forretningsområde", value: snapshot.businessType }] },
+    { title: "Systemoplysninger", rows: [{ label: "Beskrivelse", value: snapshot.systemDescription }, { label: "Leverandør", value: snapshot.supplier }, { label: "Rettighedshaver", value: snapshot.rightsHolder }, { label: "Dataejer", value: snapshot.dataOwner }, { label: "Systemejer", value: snapshot.systemOwner }] },
+    { title: "System og anskaffelsesform", rows: [{ label: "Anskaffelsesform", value: snapshot.acquisitionMethod }, { label: "Anskaffelsestype", value: snapshot.acquisitionType === "tilkøb" ? "Tilkøb" : "Nyanskaffelse" }, { label: "Markedsafdækning", value: yesNo(snapshot.marketResearch) }, { label: "Undersøgte systemer", value: snapshot.marketResearchSystems }] },
+    { title: "Værdi for kommunen", rows: [{ label: "Formål", value: snapshot.purpose }, { label: "Funktionalitet", value: snapshot.functionDescription }, { label: "KLE-emner", value: list(snapshot.kleTopics) }, { label: "Tværgående", value: yesNo(snapshot.crossCutting) }, { label: "Afdelinger", value: list(snapshot.crossDepartments) }] },
+    { title: "Investering", rows: [{ label: "Budget", value: yesNo(snapshot.hasBudget) }, { label: "Budgetbeløb", value: `${snapshot.budgetAmount || "0"} kr.` }, { label: "Engangsomkostning", value: `${snapshot.oneTimeCost || "0"} kr.` }, { label: "Årlig omkostning", value: `${snapshot.yearlyCost || "0"} kr.` }, { label: "Forventede gevinster", value: snapshot.benefits }] },
+    { title: "Risikovurdering", rows: [{ label: "Risikovurdering udført", value: yesNo(snapshot.hasRiskAssessment) }, { label: "Behov for hjælp", value: yesNo(snapshot.needsRiskHelp) }, { label: "Personoplysninger", value: yesNo(snapshot.personalData) }, { label: "Dataklassifikation", value: snapshot.dataClassification }, { label: "Bilag", value: files("risk-assessment") }] },
+    { title: "Databehandleraftale", rows: [{ label: "Databehandleraftale", value: yesNo(snapshot.hasDpa) }, { label: "Kontrakt", value: yesNo(snapshot.hasContract) }, { label: "DPA-bilag", value: files("data-processing-agreement") }, { label: "Kontraktbilag", value: files("contract") }] },
+    { title: "Implementering", rows: [{ label: "Start", value: formatCaseDate(snapshot.startDate) }, { label: "Slut", value: formatCaseDate(snapshot.endDate) }, { label: "Antal brugere", value: snapshot.implementationUsers }, { label: "Ressourcer", value: snapshot.implementationResources }, { label: "Milepæle", value: list(snapshot.milestones) }] },
+    { title: "IT-krav", rows: [{ label: "Arkitekturtegning", value: yesNo(snapshot.hasArchitecture) }, { label: "Arkitekturbilag", value: files("architecture") }, { label: "Leverandørtjekliste", value: yesNo(snapshot.hasSupplierChecklist) }, { label: "Tjeklistebilag", value: files("supplier-checklist") }, { label: "Journaliseret i ESDH", value: yesNo(snapshot.checklistJournalized) }] },
+    { title: "Øvrige", rows: [{ label: "Godkendende chef", value: snapshot.approvingLeader }, { label: "Bemærkninger", value: snapshot.remarks }, { label: "Samtykke", value: snapshot.consent ? "Ja" : "Nej" }] },
+  ];
+}
+
+function formatCaseDate(value: string) {
+  if (!value) return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+}
+
+function personInitials(name: string | null) {
+  if (!name) return "–";
+  return name.trim().split(/\s+/u).filter(Boolean).map((part) => part[0]).join("").slice(0, 2).toLocaleUpperCase("da-DK") || "–";
 }
 
 function YesNoControl({ value, onChange }: { value: "" | "Ja" | "Nej"; onChange: (value: "Ja" | "Nej") => void }) {
   return <div className="choice-row" role="radiogroup">{(["Ja", "Nej"] as const).map((option) => <button className={value === option ? "selected" : ""} type="button" role="radio" aria-checked={value === option} key={option} onClick={() => onChange(option)}><span aria-hidden="true">{value === option ? <Check size={14} /> : null}</span>{option}</button>)}</div>;
 }
 
-function DgitaApprovalPanel({ value, onSave }: { value: DgitaApproval; onSave: (value: DgitaApproval) => void }) {
+function DgitaApprovalPanel({ value, onSave }: { value: DgitaApproval; onSave: (value: DgitaApproval) => Promise<boolean> }) {
   const [draft, setDraft] = useState<DgitaApproval>(() => structuredClone(value));
+  const [saving, setSaving] = useState(false);
 
   function update<K extends keyof DgitaApproval>(field: K, next: DgitaApproval[K]) {
     setDraft((current) => ({ ...current, [field]: next }));
   }
 
-  return <div className="dgita-review-layout"><section className="plain-section dgita-review"><div className="plain-heading"><span className="section-label dark">Internt arbejdsområde</span><h2>D-GITA-godkendelse</h2><button className="solid-button" type="button" onClick={() => onSave(draft)}><Save size={17} /> Gem D-GITA-felter</button></div><div className="internal-notice"><LockKeyhole size={18} /><p>Dette område er kun tilgængeligt for D-GITA-konsulenter og administratorer. Interne kommentarer vises aldrig for anmoderen eller i PDF-kvitteringen.</p></div><Question title="D-GITA felt: Er ansøgningen godkendt?"><YesNoControl value={draft.approved} onChange={(next) => update("approved", next)} /></Question><Question title="D-GITA felt: Dato"><input className="clean-input" type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></Question><Question title="D-GITA felt: Angiv på hvilket lovgrundlag at data behandles" hint="Det kan være en idé at tage kontakt til den i kommunen som er informationssikkerhedsansvarlig/koordinator"><label className="clean-select review-select"><select value={draft.legalBasis} onChange={(event) => update("legalBasis", event.target.value as DgitaApproval["legalBasis"])}><option value="">Vælg lovgrundlag</option>{D_GITA_LEGAL_BASES.map((basis) => <option key={basis}>{basis}</option>)}</select><ChevronDown size={16} /></label></Question><Question title="D-GITA felt: D-GITA ansvarlig" hint="Skriv her hvem der er ansvarlig for behandling af formularen."><input className="clean-input" value={draft.responsible} onChange={(event) => update("responsible", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Er der flere D-GITA ansvarlige?"><YesNoControl value={draft.hasAdditionalResponsible} onChange={(next) => update("hasAdditionalResponsible", next)} /></Question>{draft.hasAdditionalResponsible === "Ja" ? <Question title="Hvis ja, angiv næste D-GITA ansvarlige"><input className="clean-input" value={draft.additionalResponsible} onChange={(event) => update("additionalResponsible", event.target.value)} placeholder="Angiv en eller flere personer" /></Question> : null}<Question title="D-GITA felt: IT-konsulent" hint="Vælg den person som bliver koblet på løsningen, som en teknisk ansvarlig fra IT-afdelingen."><input className="clean-input" value={draft.itConsultant} onChange={(event) => update("itConsultant", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Medfører systemet ændringer i den eksisterende infrastruktur?"><YesNoControl value={draft.infrastructureChanges} onChange={(next) => update("infrastructureChanges", next)} /></Question><Question title="D-GITA felt: Bemærkninger"><textarea className="clean-input" rows={4} value={draft.notes} onChange={(event) => update("notes", event.target.value)} /></Question><Question title="D-GITA felt: Interne kommentarer" hint="Kommentarer mellem D-GITA konsulenter. Feltet er skjult for anmoder og medtages ikke i den PDF, der genereres ved endelig godkendelse."><textarea className="clean-input internal-comment-input" rows={5} value={draft.internalComments} onChange={(event) => update("internalComments", event.target.value)} /></Question><Question title="D-GITA felt: Fase" hint="Beskriver hvilken fase ansøgningen er i."><label className="clean-select review-select"><select value={draft.phase} onChange={(event) => update("phase", event.target.value as DgitaApproval["phase"])}>{D_GITA_PHASES.map((phase) => <option key={phase}>{phase}</option>)}</select><ChevronDown size={16} /></label></Question></section><aside className="review-source-note"><ShieldCheck size={23} /><span className="section-label dark">Kildematch</span><h3>Felter fra den nuværende løsning</h3><p>Godkendelsesfelterne og hjælpeteksterne er kortlagt fra Power Pages-formularen “D-GITA-Godkendelse”.</p><ul><li><Check size={14} /> Betinget ekstra ansvarlig</li><li><Check size={14} /> Lovgrundlag: NSIS, NIS2 eller GDPR</li><li><Check size={14} /> Intern kommentar adskilt fra ansøger</li><li><Check size={14} /> Fase og infrastrukturbeslutning</li></ul></aside></div>;
+  return <div className="dgita-review-layout"><section className="plain-section dgita-review"><div className="plain-heading"><span className="section-label dark">Internt arbejdsområde</span><h2>D-GITA-godkendelse</h2><button className="solid-button" type="button" disabled={saving} onClick={() => { setSaving(true); void onSave(draft).finally(() => setSaving(false)); }}><Save size={17} /> {saving ? "Gemmer…" : "Gem D-GITA-felter"}</button></div><div className="internal-notice"><LockKeyhole size={18} /><p>Dette område er kun tilgængeligt for D-GITA-konsulenter og administratorer. Interne kommentarer vises aldrig for anmoderen eller i PDF-kvitteringen.</p></div><Question title="D-GITA felt: Er ansøgningen godkendt?"><YesNoControl value={draft.approved} onChange={(next) => update("approved", next)} /></Question><Question title="D-GITA felt: Dato"><input className="clean-input" type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></Question><Question title="D-GITA felt: Angiv på hvilket lovgrundlag at data behandles" hint="Det kan være en idé at tage kontakt til den i kommunen som er informationssikkerhedsansvarlig/koordinator"><label className="clean-select review-select"><select value={draft.legalBasis} onChange={(event) => update("legalBasis", event.target.value as DgitaApproval["legalBasis"])}><option value="">Vælg lovgrundlag</option>{D_GITA_LEGAL_BASES.map((basis) => <option key={basis}>{basis}</option>)}</select><ChevronDown size={16} /></label></Question><Question title="D-GITA felt: D-GITA ansvarlig" hint="Skriv her hvem der er ansvarlig for behandling af formularen."><input className="clean-input" value={draft.responsible} onChange={(event) => update("responsible", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Er der flere D-GITA ansvarlige?"><YesNoControl value={draft.hasAdditionalResponsible} onChange={(next) => update("hasAdditionalResponsible", next)} /></Question>{draft.hasAdditionalResponsible === "Ja" ? <Question title="Hvis ja, angiv næste D-GITA ansvarlige"><input className="clean-input" value={draft.additionalResponsible} onChange={(event) => update("additionalResponsible", event.target.value)} placeholder="Angiv en eller flere personer" /></Question> : null}<Question title="D-GITA felt: IT-konsulent" hint="Vælg den person som bliver koblet på løsningen, som en teknisk ansvarlig fra IT-afdelingen."><input className="clean-input" value={draft.itConsultant} onChange={(event) => update("itConsultant", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Medfører systemet ændringer i den eksisterende infrastruktur?"><YesNoControl value={draft.infrastructureChanges} onChange={(next) => update("infrastructureChanges", next)} /></Question><Question title="D-GITA felt: Bemærkninger"><textarea className="clean-input" rows={4} value={draft.notes} onChange={(event) => update("notes", event.target.value)} /></Question><Question title="D-GITA felt: Interne kommentarer" hint="Kommentarer mellem D-GITA konsulenter. Feltet er skjult for anmoder og medtages ikke i den PDF, der genereres ved endelig godkendelse."><textarea className="clean-input internal-comment-input" rows={5} value={draft.internalComments} onChange={(event) => update("internalComments", event.target.value)} /></Question><Question title="D-GITA felt: Fase" hint="Beskriver hvilken fase ansøgningen er i."><label className="clean-select review-select"><select value={draft.phase} onChange={(event) => update("phase", event.target.value as DgitaApproval["phase"])}>{D_GITA_PHASES.map((phase) => <option key={phase}>{phase}</option>)}</select><ChevronDown size={16} /></label></Question></section><aside className="review-source-note"><ShieldCheck size={23} /><span className="section-label dark">Kildematch</span><h3>Felter fra den nuværende løsning</h3><p>Godkendelsesfelterne og hjælpeteksterne er kortlagt fra Power Pages-formularen “D-GITA-Godkendelse”.</p><ul><li><Check size={14} /> Betinget ekstra ansvarlig</li><li><Check size={14} /> Lovgrundlag: NSIS, NIS2 eller GDPR</li><li><Check size={14} /> Intern kommentar adskilt fra ansøger</li><li><Check size={14} /> Fase og infrastrukturbeslutning</li></ul></aside></div>;
 }
 
 function FileList({ caseId }: { caseId: string }) {
@@ -1024,12 +1351,42 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toLocaleString("da-DK", { maximumFractionDigits: 1 })} MB`;
 }
 
-function Comments() {
-  return <section className="plain-section comments-section"><div className="plain-heading"><span className="section-label dark">Sagsdialog</span><h2>Kommentarer</h2></div><div className="empty-comments"><MessageSquare size={25} /><strong>Der er ingen kommentarer at vise</strong><p>Feltkommentarer er aktive under fanen Ansøgning. Den generelle sagsdialog tilsluttes i workflowfasen.</p></div><div className="comment-composer"><textarea rows={4} placeholder="Sagsdialog aktiveres i næste fase" disabled /><div><button type="button" disabled><Paperclip size={17} /> Vedhæft</button><button className="solid-button" type="button" disabled><Send size={17} /> Opret kommentar</button></div></div></section>;
+function Comments({
+  comments,
+  loading,
+  submitting,
+  error,
+  canInternal,
+  onSubmit,
+}: {
+  comments: CaseComment[];
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  canInternal: boolean;
+  onSubmit: (input: SubmitCaseCommentInput) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState("");
+  const [visibility, setVisibility] = useState<CaseCommentVisibility>("applicant");
+
+  async function submit() {
+    const body = draft.trim();
+    if (!body) return;
+    if (await onSubmit({ body, visibility })) setDraft("");
+  }
+
+  return <section className="plain-section comments-section"><div className="plain-heading"><span className="section-label dark">Sagsdialog</span><h2>Kommentarer</h2></div>{loading ? <p className="section-lead">Henter sagsdialog…</p> : null}{error ? <p className="field-error">{error}</p> : null}{!loading && comments.length === 0 ? <div className="empty-comments"><MessageSquare size={25} /><strong>Der er ingen kommentarer at vise</strong><p>Start en dialog med anmoder eller D-GITA-konsulenten.</p></div> : <div className="case-comment-list">{comments.map((comment) => <article className={cx("case-comment", comment.visibility === "internal" && "internal")} key={comment.id}><span>{comment.authorName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span><div><header><strong>{comment.authorName}</strong>{comment.visibility === "internal" ? <small><LockKeyhole size={12} /> Intern D-GITA-note</small> : <small>Delt på sagen</small>}</header><p>{comment.body}</p><time>{formatFeedDate(comment.createdAt)}</time></div></article>)}</div>}<div className="comment-composer"><textarea rows={4} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Skriv en kommentar til sagen…" maxLength={8000} />{canInternal ? <label className="comment-visibility">Synlighed<select value={visibility} onChange={(event) => setVisibility(event.target.value as CaseCommentVisibility)}><option value="applicant">Delt med anmoder</option><option value="internal">Kun D-GITA</option></select></label> : null}<div><button className="solid-button" type="button" disabled={!draft.trim() || submitting} onClick={() => void submit()}><Send size={17} /> {submitting ? "Gemmer…" : "Opret kommentar"}</button></div></div></section>;
 }
 
-function AuditTrail({ item }: { item: CaseRecord }) {
-  return <section className="plain-section audit-section"><div className="plain-heading"><span className="section-label dark">Auditspor</span><h2>Historik på sagen</h2></div>{[[item.changed, "Fase ændret til Under behandling", "Peter Bjerre Ahlgren"], ["26-08-2026 10:44", "Ledergodkendelse registreret", "Peter Bjerre Ahlgren"], ["26-08-2026 10:12", "Ansøgning indsendt og kvittering sendt", item.applicant], [item.created, "Sag oprettet som kladde", item.applicant]].map(([date, event, actor], index) => <div className="audit-row" key={event}><div><span>{index === 0 ? <History size={16} /> : <Check size={15} />}</span>{index < 3 ? <i /> : null}</div><time>{date}</time><strong>{event}</strong><small>{actor}</small></div>)}</section>;
+function AuditTrail({ events, loading, error }: { events: CaseActivityEvent[]; loading: boolean; error: string | null }) {
+  return <section className="plain-section audit-section"><div className="plain-heading"><span className="section-label dark">Auditspor</span><h2>Historik på sagen</h2></div>{loading ? <p className="section-lead">Henter auditspor…</p> : null}{error ? <p className="field-error">{error}</p> : null}{!loading && !error && events.length === 0 ? <div className="empty-comments"><History size={25} /><strong>Ingen aktivitet registreret endnu</strong><p>Nye ændringer til sagen bliver gemt i det append-only auditspor.</p></div> : null}{events.map((event, index) => <div className="audit-row" key={event.id}><div><span>{index === 0 ? <History size={16} /> : <Check size={15} />}</span>{index < events.length - 1 ? <i /> : null}</div><time>{formatFeedDate(event.createdAt)}</time><strong>{event.summary}</strong><small>{event.actorName}</small></div>)}</section>;
+}
+
+function formatFeedDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 type AdminTab = ContentCategory | "formular" | "mail" | "integrationer";
@@ -1045,13 +1402,14 @@ function AdminView({
 }: {
   content: ContentEntry[];
   viewer: WorkspaceViewer;
-  onUpdateContent: (entry: ContentEntry) => boolean;
-  onAddContent: (entry: ContentEntry) => boolean;
-  onRemoveContent: (id: string) => boolean;
-  onResetContent: () => boolean;
+  onUpdateContent: (entry: ContentEntry) => Promise<boolean>;
+  onAddContent: (entry: ContentEntry) => Promise<boolean>;
+  onRemoveContent: (id: string) => Promise<boolean>;
+  onResetContent: () => Promise<boolean>;
   onToast: (message: string) => void;
 }) {
   const [tab, setTab] = useState<AdminTab>("portal_text");
+  const [resetting, setResetting] = useState(false);
   const contentTabs = Object.entries(CONTENT_CATEGORY_LABELS) as Array<[ContentCategory, string]>;
   const tabs: Array<[AdminTab, string]> = [
     ...contentTabs,
@@ -1062,12 +1420,12 @@ function AdminView({
   const isContentTab = tab in CONTENT_CATEGORY_LABELS;
 
   return <div className="portal-page page-width"><PageIntro eyebrow="Administration" title="Indhold, formular og workflows" text="Redigér portaltekster, hjælpetekster, FAQ, links og databehandlerkrav. Administratorrollen har samtidig adgang til sager og D-GITA-behandling."><div className="admin-demo-badge"><ShieldCheck size={17} /><span><strong>Admin · servervalideret</strong><small>{viewer.displayName}</small></span></div></PageIntro>
-    <div className="admin-mode-note"><Info size={18} /><p>Ændringer gemmes i portalens database med administratoridentitet og auditspor. Testrollen erstattes senere af kommunal SSO.</p><button className="line-button" type="button" onClick={() => { if (onResetContent()) onToast("Standardindholdet er gendannet."); }}><RotateCcw size={16} /> Gendan standard</button></div>
+    <div className="admin-mode-note"><Info size={18} /><p>Ændringer gemmes i portalens database med administratoridentitet og auditspor. Testrollen erstattes senere af kommunal SSO.</p><button className="line-button" type="button" disabled={resetting} onClick={() => { setResetting(true); void onResetContent().then((saved) => { if (saved) onToast("Standardindholdet er gendannet."); }).finally(() => setResetting(false)); }}><RotateCcw size={16} /> {resetting ? "Gendanner…" : "Gendan standard"}</button></div>
     <nav className="admin-nav" aria-label="Adminområder">{tabs.map(([id, label]) => <button className={tab === id ? "active" : ""} type="button" key={id} onClick={() => setTab(id)}>{label}</button>)}</nav>
     {isContentTab ? <ContentManager category={tab as ContentCategory} content={content} onUpdate={onUpdateContent} onAdd={onAddContent} onRemove={onRemoveContent} onToast={onToast} /> : null}
-    {tab === "integrationer" ? <div className="admin-layout"><section className="plain-section"><div className="plain-heading"><span className="section-label dark">Systemforbindelser</span><h2>Integrationer</h2></div><div className="integration-list"><Integration icon={Mail} title="Microsoft Outlook" detail="Kvitteringer og godkendelsesmails" status="Klar til opsætning" /><Integration icon={LayoutGrid} title="KITOS" detail="Systemkatalog og organisationsopslag" status="Normal drift" /><Integration icon={FolderOpen} title="Dokumentlager" detail="Bilag og versionslåste PDF-filer" status="Normal drift" /><Integration icon={Inbox} title="ESDH" detail="Journalreferencer og arkivering" status="Klar til opsætning" /></div></section><aside className="security-panel"><ShieldCheck size={27} /><span className="section-label">Fremtidig adgang</span><h2>Kommunal SSO og rolleclaims</h2><p>Testdropdownen erstattes af en servervalideret identitet fra Fælleskommunal Adgangsstyring eller kommunens Entra ID.</p><ul><li><Check size={15} /> Stabil brugeridentitet som ejer</li><li><Check size={15} /> Roller fra godkendte grupper</li><li><Check size={15} /> Tenant-adskilte data og auditspor</li></ul></aside></div> : null}
-    {tab === "formular" ? <section className="plain-section admin-table-section"><div className="plain-heading"><span className="section-label dark">Publiceret motorversion 1</span><h2>Formularens sektioner</h2><button className="solid-button" type="button" onClick={() => onToast("En ny kladde til formularversion er oprettet.")}><Plus size={17} /> Ny version</button></div><p className="section-lead">Tekster redigeres under Hjælpetekster. Feltnøgler, validering og betingelser er låst til en formularversion, så eksisterende ansøgninger ikke ændres bagudrettet.</p>{applicationSteps.slice(0, -1).map((name, index) => <div className="admin-form-row" key={name}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{name}</strong><small>{index === 0 ? "7 felter · 4 betingede regler" : `${3 + index} felter · aktiv`}</small></div><button type="button" aria-label={`Flere handlinger for ${name}`}><MoreHorizontal size={19} /></button></div>)}</section> : null}
-    {tab === "mail" ? <div className="admin-layout"><section className="plain-section"><div className="plain-heading"><span className="section-label dark">Microsoft Outlook</span><h2>Mail og kvitteringer</h2></div><p className="section-lead">Skabelonerne er klargjort. Faktisk afsendelse kræver en server-side Microsoft Graph-forbindelse og kommunal godkendelse.</p>{[["Ansøgning indsendt", "application.submitted"], ["Ny sag til visitering", "application.received"], ["Ledergodkendelse", "approval.requested"], ["Godkendelse registreret", "approval.completed"], ["Information mangler", "information.requested"], ["Sag afsluttet", "application.closed"]].map(([name, event]) => <div className="mail-template-row" key={event}><Mail size={18} /><div><strong>{name}</strong><code>{event}</code></div><span>Kladde</span><button type="button"><ChevronRight size={18} /></button></div>)}</section><aside className="mail-receipt"><div className="receipt-sender"><span>DG</span><div><strong>D-GITA</strong><small>dgita@kalundborg.dk</small></div></div><small>Ansøgning ITA-001284 er modtaget</small><h3>Tak — din ansøgning er indsendt</h3><p>Din ansøgning om <strong>WSUS klient</strong> er sendt til D-GITA.</p><dl><div><dt>Sagsnummer</dt><dd>ITA-001284</dd></div><div><dt>Fase</dt><dd>Indsendt</dd></div></dl><button type="button">Åbn din sag</button><p>Din PDF-kvittering vedhæftes efter Graph-opsætning.</p><button className="line-button full" type="button" onClick={() => onToast("Preview er vist. Outlook-afsendelse afventer Graph-forbindelsen.")}><Send size={17} /> Test preview</button></aside></div> : null}
+    {tab === "integrationer" ? <div className="admin-layout"><section className="plain-section"><div className="plain-heading"><span className="section-label dark">Systemforbindelser</span><h2>Integrationer</h2></div><div className="integration-list"><Integration icon={Mail} title="Microsoft Outlook" detail="Microsoft Graph-mailkø med automatisk behandling" status="Kræver miljøopsætning" tone="waiting" /><Integration icon={LayoutGrid} title="KITOS" detail="Importeret systemkatalog og lokale systemer" status="Data indlæst" tone="healthy" /><Integration icon={FolderOpen} title="Dokumentlager" detail="Bilag og versionslåste PDF-filer i R2" status="Aktiv" tone="healthy" /><Integration icon={Inbox} title="ESDH" detail="Journalreferencer gemmes; automatisk arkivering er ikke tilsluttet" status="Ikke tilsluttet" tone="waiting" /></div></section><aside className="security-panel"><ShieldCheck size={27} /><span className="section-label">Fremtidig adgang</span><h2>Kommunal SSO og rolleclaims</h2><p>Testdropdownen erstattes af en servervalideret identitet fra Fælleskommunal Adgangsstyring eller kommunens Entra ID.</p><ul><li><Check size={15} /> Stabil brugeridentitet som ejer</li><li><Check size={15} /> Roller fra godkendte grupper</li><li><Check size={15} /> Tenant-adskilte data og auditspor</li></ul></aside></div> : null}
+    {tab === "formular" ? <section className="plain-section admin-table-section"><div className="plain-heading"><span className="section-label dark">Publiceret motorversion 1</span><h2>Formularens sektioner</h2></div><p className="section-lead">Tekster redigeres under Hjælpetekster. Feltnøgler, validering og betingelser er kodeadministreret og låst til en formularversion, så eksisterende ansøgninger ikke ændres bagudrettet.</p>{applicationSteps.slice(0, -1).map((name, index) => <div className="admin-form-row" key={name}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{name}</strong><small>{index === 0 ? "7 felter · 4 betingede regler" : `${3 + index} felter · aktiv`}</small></div></div>)}</section> : null}
+    {tab === "mail" ? <MailAdminPanel onToast={onToast} /> : null}
   </div>;
 }
 
@@ -1081,18 +1439,19 @@ function ContentManager({
 }: {
   category: ContentCategory;
   content: ContentEntry[];
-  onUpdate: (entry: ContentEntry) => boolean;
-  onAdd: (entry: ContentEntry) => boolean;
-  onRemove: (id: string) => boolean;
+  onUpdate: (entry: ContentEntry) => Promise<boolean>;
+  onAdd: (entry: ContentEntry) => Promise<boolean>;
+  onRemove: (id: string) => Promise<boolean>;
   onToast: (message: string) => void;
 }) {
   const [newTitle, setNewTitle] = useState("");
   const [newBody, setNewBody] = useState("");
   const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
   const entries = content.filter((entry) => entry.category === category);
   const needsUrl = category === "link";
 
-  function addEntry() {
+  async function addEntry() {
     if (!newTitle.trim() || !newBody.trim()) {
       onToast("Skriv både titel og tekst, før indholdet tilføjes.");
       return;
@@ -1110,15 +1469,20 @@ function ContentManager({
       location: CONTENT_CATEGORY_LABELS[category],
       published: true,
     };
-    if (onAdd(entry)) {
-      setNewTitle("");
-      setNewBody("");
-      setNewUrl("");
-      onToast("Indholdet er tilføjet og publiceret i demoen.");
+    setAdding(true);
+    try {
+      if (await onAdd(entry)) {
+        setNewTitle("");
+        setNewBody("");
+        setNewUrl("");
+        onToast("Indholdet er tilføjet og publiceret i portalen.");
+      }
+    } finally {
+      setAdding(false);
     }
   }
 
-  return <section className="plain-section content-manager"><div className="plain-heading"><span className="section-label dark">Redigerbart indhold</span><h2>{CONTENT_CATEGORY_LABELS[category]}</h2><span className="content-count">{entries.length} elementer</span></div><p className="section-lead">Ret titel, tekst, publiceringsstatus{needsUrl ? " og linkadresse" : ""}. Tekniske feltnøgler og formularlogik kan ikke ændres her.</p><div className="content-entry-list">{entries.map((entry) => <ContentEditorCard key={`${entry.id}:${entry.updatedAt ?? "default"}`} entry={entry} onUpdate={onUpdate} onRemove={onRemove} onToast={onToast} />)}</div><div className="new-content-card"><div><span className="section-label dark">Nyt element</span><h3>Tilføj til {CONTENT_CATEGORY_LABELS[category].toLowerCase()}</h3></div><label>Titel<input className="clean-input" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Skriv en tydelig titel" /></label><label>Tekst<textarea className="clean-input" rows={4} value={newBody} onChange={(event) => setNewBody(event.target.value)} placeholder="Skriv indholdet" /></label>{needsUrl ? <label>Linkadresse<input className="clean-input" value={newUrl} onChange={(event) => setNewUrl(event.target.value)} placeholder="https://…, /intern-side eller mailto:…" /></label> : null}<button className="solid-button" type="button" onClick={addEntry}><Plus size={17} /> Tilføj og publicér</button></div></section>;
+  return <section className="plain-section content-manager"><div className="plain-heading"><span className="section-label dark">Redigerbart indhold</span><h2>{CONTENT_CATEGORY_LABELS[category]}</h2><span className="content-count">{entries.length} elementer</span></div><p className="section-lead">Ret titel, tekst, publiceringsstatus{needsUrl ? " og linkadresse" : ""}. Tekniske feltnøgler og formularlogik kan ikke ændres her.</p><div className="content-entry-list">{entries.map((entry) => <ContentEditorCard key={`${entry.id}:${entry.updatedAt ?? "default"}`} entry={entry} onUpdate={onUpdate} onRemove={onRemove} onToast={onToast} />)}</div><div className="new-content-card"><div><span className="section-label dark">Nyt element</span><h3>Tilføj til {CONTENT_CATEGORY_LABELS[category].toLowerCase()}</h3></div><label>Titel<input className="clean-input" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Skriv en tydelig titel" /></label><label>Tekst<textarea className="clean-input" rows={4} value={newBody} onChange={(event) => setNewBody(event.target.value)} placeholder="Skriv indholdet" /></label>{needsUrl ? <label>Linkadresse<input className="clean-input" value={newUrl} onChange={(event) => setNewUrl(event.target.value)} placeholder="https://…, /intern-side eller mailto:…" /></label> : null}<button className="solid-button" type="button" disabled={adding} onClick={() => void addEntry()}><Plus size={17} /> {adding ? "Publicerer…" : "Tilføj og publicér"}</button></div></section>;
 }
 
 function ContentEditorCard({
@@ -1128,25 +1492,41 @@ function ContentEditorCard({
   onToast,
 }: {
   entry: ContentEntry;
-  onUpdate: (entry: ContentEntry) => boolean;
-  onRemove: (id: string) => boolean;
+  onUpdate: (entry: ContentEntry) => Promise<boolean>;
+  onRemove: (id: string) => Promise<boolean>;
   onToast: (message: string) => void;
 }) {
   const [draft, setDraft] = useState(entry);
   const [urlError, setUrlError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
-  function save() {
+  async function save() {
     if (draft.url && !isSafeContentUrl(draft.url)) {
       setUrlError("Brug https://, mailto: eller en intern sti der starter med /.");
       return;
     }
     setUrlError("");
-    if (onUpdate(draft)) onToast(`“${draft.title}” er gemt.`);
+    setSaving(true);
+    try {
+      if (await onUpdate(draft)) onToast(`“${draft.title}” er gemt.`);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  return <article className="content-editor-card"><div className="content-editor-meta"><span>{entry.location}</span><code>{entry.id}</code></div><label>Titel<input className="clean-input" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Tekst<textarea className="clean-input" rows={4} value={draft.body} onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /></label>{entry.category === "link" ? <label>Linkadresse<input className={cx("clean-input", urlError && "input-error")} value={draft.url ?? ""} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />{urlError ? <small className="field-error">{urlError}</small> : null}</label> : null}<div className="content-editor-actions"><label className="publish-toggle"><input type="checkbox" checked={draft.published} onChange={(event) => setDraft((current) => ({ ...current, published: event.target.checked }))} /><span /> Publiceret</label><div><button className="quiet-danger" type="button" onClick={() => { if (onRemove(entry.id)) onToast(`“${entry.title}” er fjernet. Standardindhold kan gendannes øverst.`); }}><Trash2 size={16} /> Fjern</button><button className="solid-button" type="button" onClick={save}><Save size={16} /> Gem</button></div></div>{entry.updatedAt ? <small className="content-updated">Senest ændret {new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.updatedAt))}{entry.updatedBy ? ` af ${entry.updatedBy}` : ""}</small> : null}</article>;
+  async function remove() {
+    setRemoving(true);
+    try {
+      if (await onRemove(entry.id)) onToast(`“${entry.title}” er fjernet. Standardindhold kan gendannes øverst.`);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  return <article className="content-editor-card"><div className="content-editor-meta"><span>{entry.location}</span><code>{entry.id}</code></div><label>Titel<input className="clean-input" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Tekst<textarea className="clean-input" rows={4} value={draft.body} onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /></label>{entry.category === "link" ? <label>Linkadresse<input className={cx("clean-input", urlError && "input-error")} value={draft.url ?? ""} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />{urlError ? <small className="field-error">{urlError}</small> : null}</label> : null}<div className="content-editor-actions"><label className="publish-toggle"><input type="checkbox" checked={draft.published} onChange={(event) => setDraft((current) => ({ ...current, published: event.target.checked }))} /><span /> Publiceret</label><div><button className="quiet-danger" type="button" disabled={removing || saving} onClick={() => void remove()}><Trash2 size={16} /> {removing ? "Fjerner…" : "Fjern"}</button><button className="solid-button" type="button" disabled={saving || removing} onClick={() => void save()}><Save size={16} /> {saving ? "Gemmer…" : "Gem"}</button></div></div>{entry.updatedAt ? <small className="content-updated">Senest ændret {new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.updatedAt))}{entry.updatedBy ? ` af ${entry.updatedBy}` : ""}</small> : null}</article>;
 }
 
-function Integration({ icon: Icon, title, detail, status }: { icon: LucideIcon; title: string; detail: string; status: string }) {
-  return <div className="integration-row"><span><Icon size={20} /></span><div><strong>{title}</strong><small>{detail}</small></div><em className={status.includes("kø") ? "waiting" : "healthy"}><i />{status}</em><button type="button"><Settings2 size={18} /></button></div>;
+function Integration({ icon: Icon, title, detail, status, tone }: { icon: LucideIcon; title: string; detail: string; status: string; tone: "healthy" | "waiting" }) {
+  return <div className="integration-row"><span><Icon size={20} /></span><div><strong>{title}</strong><small>{detail}</small></div><em className={tone}><i />{status}</em></div>;
 }

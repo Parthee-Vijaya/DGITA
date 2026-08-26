@@ -560,3 +560,197 @@ export const portalAuditEvents = sqliteTable(
     ),
   ],
 );
+
+export const portalNotifications = sqliteTable(
+  "portal_notifications",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => portalTenants.id, { onDelete: "restrict" }),
+    recipientUserId: text("recipient_user_id")
+      .notNull()
+      .references(() => portalUsers.id, { onDelete: "cascade" }),
+    applicationId: text("application_id").references(() => portalApplications.id, {
+      onDelete: "restrict",
+    }),
+    sourceEventId: text("source_event_id").references(() => portalAuditEvents.id, {
+      onDelete: "restrict",
+    }),
+    eventType: text("event_type").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    linkPath: text("link_path"),
+    status: text("status", { enum: ["unread", "read", "dismissed"] })
+      .notNull()
+      .default("unread"),
+    createdAt: createdAt(),
+    readAt: text("read_at"),
+  },
+  (table) => [
+    uniqueIndex("portal_notifications_recipient_event_uidx").on(
+      table.recipientUserId,
+      table.sourceEventId,
+    ),
+    index("portal_notifications_recipient_status_idx").on(
+      table.tenantId,
+      table.recipientUserId,
+      table.status,
+      table.createdAt,
+    ),
+    index("portal_notifications_application_idx").on(
+      table.tenantId,
+      table.applicationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const portalReceipts = sqliteTable(
+  "portal_receipts",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => portalTenants.id, { onDelete: "restrict" }),
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => portalApplications.id, { onDelete: "restrict" }),
+    applicationVersionId: text("application_version_id")
+      .notNull()
+      .references(() => portalApplicationVersions.id, { onDelete: "restrict" }),
+    kind: text("kind", { enum: ["submission", "approval", "final"] }).notNull(),
+    status: text("status", { enum: ["generating", "ready", "failed"] })
+      .notNull()
+      .default("generating"),
+    storageKey: text("storage_key").notNull(),
+    checksumSha256: text("checksum_sha256"),
+    sizeBytes: integer("size_bytes"),
+    contentType: text("content_type").notNull().default("application/pdf"),
+    createdByUserId: text("created_by_user_id").references(() => portalUsers.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: createdAt(),
+    generatedAt: text("generated_at"),
+    failureReason: text("failure_reason"),
+  },
+  (table) => [
+    uniqueIndex("portal_receipts_version_kind_uidx").on(
+      table.tenantId,
+      table.applicationVersionId,
+      table.kind,
+    ),
+    uniqueIndex("portal_receipts_storage_key_uidx").on(table.storageKey),
+    index("portal_receipts_application_idx").on(
+      table.tenantId,
+      table.applicationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const portalMailOutbox = sqliteTable(
+  "portal_mail_outbox",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => portalTenants.id, { onDelete: "restrict" }),
+    applicationId: text("application_id").references(() => portalApplications.id, {
+      onDelete: "restrict",
+    }),
+    recipientUserId: text("recipient_user_id").references(() => portalUsers.id, {
+      onDelete: "set null",
+    }),
+    recipientEmail: text("recipient_email").notNull(),
+    recipientName: text("recipient_name"),
+    templateKey: text("template_key").notNull(),
+    subject: text("subject").notNull(),
+    textBody: text("text_body").notNull(),
+    htmlBody: text("html_body").notNull(),
+    attachmentsJson: text("attachments_json").notNull().default("[]"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status", {
+      enum: ["queued", "processing", "sent", "failed", "cancelled"],
+    })
+      .notNull()
+      .default("queued"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextAttemptAt: text("next_attempt_at"),
+    provider: text("provider").notNull().default("microsoft_graph"),
+    providerMessageId: text("provider_message_id"),
+    lastError: text("last_error"),
+    createdByUserId: text("created_by_user_id").references(() => portalUsers.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    sentAt: text("sent_at"),
+  },
+  (table) => [
+    uniqueIndex("portal_mail_outbox_tenant_idempotency_uidx").on(
+      table.tenantId,
+      table.idempotencyKey,
+    ),
+    index("portal_mail_outbox_queue_idx").on(
+      table.tenantId,
+      table.status,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
+    index("portal_mail_outbox_application_idx").on(
+      table.tenantId,
+      table.applicationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const portalApprovalRequests = sqliteTable(
+  "portal_approval_requests",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => portalTenants.id, { onDelete: "restrict" }),
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => portalApplications.id, { onDelete: "restrict" }),
+    applicationVersionId: text("application_version_id")
+      .notNull()
+      .references(() => portalApplicationVersions.id, { onDelete: "restrict" }),
+    approverEmail: text("approver_email").notNull(),
+    approverName: text("approver_name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status", {
+      enum: [
+        "pending",
+        "approving",
+        "rejecting",
+        "approved",
+        "rejected",
+        "expired",
+        "cancelled",
+      ],
+    })
+      .notNull()
+      .default("pending"),
+    decisionComment: text("decision_comment"),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => portalUsers.id, { onDelete: "restrict" }),
+    createdAt: createdAt(),
+    expiresAt: text("expires_at").notNull(),
+    decidedAt: text("decided_at"),
+  },
+  (table) => [
+    uniqueIndex("portal_approval_requests_token_hash_uidx").on(table.tokenHash),
+    index("portal_approval_requests_application_idx").on(
+      table.tenantId,
+      table.applicationId,
+      table.status,
+      table.createdAt,
+    ),
+    index("portal_approval_requests_expiry_idx").on(table.status, table.expiresAt),
+  ],
+);

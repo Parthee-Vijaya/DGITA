@@ -26,6 +26,7 @@ import {
 
 import type { CatalogSystem } from "../catalog/search";
 import {
+  APPROVING_LEADERS,
   canOpenStep,
   createAttachmentDraft,
   firstInvalidStep,
@@ -37,6 +38,7 @@ import {
   getStepWarnings,
   initialApplicationState,
   isFieldVisible,
+  normalizeApprovingLeader,
   pruneHiddenAnswers,
   type ApplicationFormState,
   type AttachmentDraft,
@@ -45,12 +47,6 @@ import {
   type UploadKind,
   type YesNo,
 } from "./engine";
-import {
-  deleteLocalAttachment,
-  getLatestLocalDraft,
-  saveLocalAttachment,
-  saveLocalDraft,
-} from "./local-persistence";
 
 const steps = [
   "Generelle oplysninger",
@@ -78,10 +74,35 @@ const descriptions = [
   "Kontrollér oplysningerne, før ansøgningen låses og sendes.",
 ];
 
+export type ApplicationSubmissionResult = {
+  id: string;
+  caseNumber: string;
+  status: "submitted";
+  versionNumber: number;
+  submittedAt: string;
+  mode: "draft" | "correction";
+  rowVersion: number;
+};
+
+type CorrectionContext = {
+  caseNumber: string;
+  currentVersionNumber: number;
+  nextVersionNumber: number;
+  rejection: {
+    approverName: string;
+    comment: string;
+    decidedAt: string | null;
+  } | null;
+};
+
 type Props = {
   onBack: () => void;
-  onSubmit: (snapshot: Record<string, unknown>) => void;
+  onSubmit: (
+    snapshot: Record<string, unknown>,
+    result: ApplicationSubmissionResult,
+  ) => void;
   onToast: (message: string) => void;
+  correctionCaseNumber?: string | null;
   guidance?: {
     intro?: string;
     catalog?: string;
@@ -89,16 +110,13 @@ type Props = {
   };
 };
 
-type StorageMode = "server" | "local";
-
-class ServerPersistenceUnavailableError extends Error {
-  constructor() {
-    super("Serverlagring er midlertidigt utilgængelig.");
-    this.name = "ServerPersistenceUnavailableError";
-  }
-}
-
-export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Props) {
+export function ApplicationFormView({
+  onBack,
+  onSubmit,
+  onToast,
+  guidance,
+  correctionCaseNumber = null,
+}: Props) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ApplicationFormState>(() =>
     structuredClone(initialApplicationState),
@@ -110,69 +128,100 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
   const [saveStatus, setSaveStatus] = useState<
     "loading" | "idle" | "saving" | "saved" | "error"
   >("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [correction, setCorrection] = useState<CorrectionContext | null>(null);
+  const [activeUploads, setActiveUploads] = useState(0);
   const draftIdRef = useRef<string | null>(null);
+  const rowVersionRef = useRef<number | null>(null);
   const formRef = useRef(form);
-  const storageModeRef = useRef<StorageMode>("server");
-  const [storageMode, setStorageMode] = useState<StorageMode>("server");
   const currentErrors = getStepErrors(form, step);
   const currentWarnings = getStepWarnings(form, step);
   const showErrors = attemptedSteps.includes(step);
 
   useEffect(() => {
     const controller = new AbortController();
+    const emptyState = structuredClone(initialApplicationState);
+    draftIdRef.current = null;
+    rowVersionRef.current = null;
+    formRef.current = emptyState;
+    setForm(emptyState);
+    setStep(0);
+    setAttemptedSteps([]);
+    setResults([]);
+    setCorrection(null);
+    setActiveUploads(0);
+    setLoadError(null);
+    setSaveStatus("loading");
     void (async () => {
       try {
-        const response = await fetch("/api/drafts", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (response.status === 503) {
-          throw new ServerPersistenceUnavailableError();
-        }
-        if (!response.ok) throw new Error("Kladden kunne ikke hentes.");
+        const response = correctionCaseNumber
+          ? await fetch("/api/drafts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "begin-correction",
+                caseNumber: correctionCaseNumber,
+              }),
+              cache: "no-store",
+              signal: controller.signal,
+            })
+          : await fetch("/api/drafts", {
+              cache: "no-store",
+              signal: controller.signal,
+            });
         const payload = (await response.json()) as {
-          draft: { id: string; state: ApplicationFormState } | null;
+          draft: {
+            id: string;
+            caseNumber: string;
+            state: ApplicationFormState;
+            mode?: "correction";
+            currentVersionNumber?: number;
+            nextVersionNumber?: number;
+            rowVersion: number;
+            rejection?: CorrectionContext["rejection"];
+          } | null;
+          error?: string;
         };
+        if (!response.ok) {
+          throw new Error(payload.error || "Kladden kunne ikke hentes.");
+        }
         if (controller.signal.aborted) return;
         if (payload.draft?.state.schemaVersion === "dgita-v1") {
+          const restoredState = normalizeApprovingLeader(payload.draft.state);
           draftIdRef.current = payload.draft.id;
-          formRef.current = payload.draft.state;
-          setForm(payload.draft.state);
+          rowVersionRef.current = payload.draft.rowVersion;
+          formRef.current = restoredState;
+          setForm(restoredState);
+          if (
+            payload.draft.mode === "correction" &&
+            typeof payload.draft.currentVersionNumber === "number" &&
+            typeof payload.draft.nextVersionNumber === "number"
+          ) {
+            setCorrection({
+              caseNumber: payload.draft.caseNumber,
+              currentVersionNumber: payload.draft.currentVersionNumber,
+              nextVersionNumber: payload.draft.nextVersionNumber,
+              rejection: payload.draft.rejection ?? null,
+            });
+          }
           setSaveStatus("saved");
+        } else if (correctionCaseNumber) {
+          throw new Error("Sagen kunne ikke åbnes til rettelser.");
         } else {
           draftIdRef.current = crypto.randomUUID();
+          rowVersionRef.current = null;
           setSaveStatus("idle");
         }
       } catch (error) {
         if ((error as Error).name === "AbortError") return;
-        if (shouldUseLocalFallback(error)) {
-          storageModeRef.current = "local";
-          setStorageMode("local");
-          try {
-            const localDraft = await getLatestLocalDraft();
-            if (controller.signal.aborted) return;
-            if (localDraft) {
-              draftIdRef.current = localDraft.id;
-              formRef.current = localDraft.state;
-              setForm(localDraft.state);
-              setSaveStatus("saved");
-            } else {
-              draftIdRef.current = crypto.randomUUID();
-              setSaveStatus("idle");
-            }
-          } catch {
-            if (controller.signal.aborted) return;
-            draftIdRef.current = crypto.randomUUID();
-            setSaveStatus("error");
-          }
-        } else {
-          draftIdRef.current = crypto.randomUUID();
-          setSaveStatus("error");
-        }
+        draftIdRef.current = null;
+        rowVersionRef.current = null;
+        setLoadError((error as Error).message);
+        setSaveStatus("error");
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [correctionCaseNumber]);
 
   useEffect(() => {
     const query = form.catalogQuery.trim();
@@ -236,11 +285,6 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
     return next;
   }
 
-  function switchToLocalStorage() {
-    storageModeRef.current = "local";
-    setStorageMode("local");
-  }
-
   async function persistDraft(
     status: "draft" | "submitted" = "draft",
     state: ApplicationFormState = formRef.current,
@@ -250,34 +294,37 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
     setSaveStatus("saving");
 
     try {
-      if (storageModeRef.current === "local") {
-        await saveLocalDraft(id, state, status);
-        setSaveStatus("saved");
-        return { id, mode: "local" as const };
-      }
-
       const response = await fetch("/api/drafts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, draft: state, status }),
+        body: JSON.stringify({
+          id,
+          draft: state,
+          status,
+          expectedRowVersion: rowVersionRef.current,
+        }),
       });
-      if (response.status === 503) {
-        throw new ServerPersistenceUnavailableError();
-      }
-      const payload = (await response.json()) as { error?: string; id?: string };
+      const payload = (await response.json()) as {
+        error?: string;
+        id?: string;
+        caseNumber?: string;
+        status?: "draft" | "changes_requested" | "submitted";
+        versionNumber?: number;
+        submittedAt?: string;
+        mode?: "draft" | "correction";
+        rowVersion?: number;
+      };
       if (!response.ok) {
         throw new Error(payload.error || "Kladden kunne ikke gemmes.");
       }
-
-      setSaveStatus("saved");
-      return { id, mode: "server" as const };
-    } catch (error) {
-      if (storageModeRef.current === "server" && shouldUseLocalFallback(error)) {
-        switchToLocalStorage();
-        await saveLocalDraft(id, state, status);
-        setSaveStatus("saved");
-        return { id, mode: "local" as const };
+      if (!Number.isInteger(payload.rowVersion) || (payload.rowVersion ?? 0) < 1) {
+        throw new Error("Serveren returnerede ikke en gyldig versionsmarkør.");
       }
+
+      rowVersionRef.current = payload.rowVersion!;
+      setSaveStatus("saved");
+      return { ...payload, id: payload.id ?? id };
+    } catch (error) {
       setSaveStatus("error");
       throw error;
     }
@@ -396,47 +443,26 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
       return;
     }
 
-    let usedLocalStorage = storageModeRef.current === "local";
+    setActiveUploads((current) => current + validFiles.length);
     for (const { file, attachment: pending } of validFiles) {
       let uploadedAttachment: AttachmentDraft | null = null;
       try {
-        if (storageModeRef.current === "server") {
-          const upload = new FormData();
-          upload.set("draftId", activeDraftId);
-          upload.set("kind", kind);
-          upload.set("file", file);
-
-          try {
-            const response = await fetch("/api/uploads", {
-              method: "POST",
-              body: upload,
-            });
-            if (response.status === 503) {
-              throw new ServerPersistenceUnavailableError();
-            }
-            const payload = (await response.json()) as {
-              attachment?: AttachmentDraft;
-              error?: string;
-            };
-            if (!response.ok || !payload.attachment) {
-              throw new Error(payload.error || "Filen kunne ikke uploades.");
-            }
-            uploadedAttachment = payload.attachment;
-          } catch (error) {
-            if (!shouldUseLocalFallback(error)) throw error;
-            switchToLocalStorage();
-            usedLocalStorage = true;
-          }
+        const upload = new FormData();
+        upload.set("draftId", activeDraftId);
+        upload.set("kind", kind);
+        upload.set("file", file);
+        const response = await fetch("/api/uploads", {
+          method: "POST",
+          body: upload,
+        });
+        const payload = (await response.json()) as {
+          attachment?: AttachmentDraft;
+          error?: string;
+        };
+        if (!response.ok || !payload.attachment) {
+          throw new Error(payload.error || "Filen kunne ikke uploades.");
         }
-
-        if (storageModeRef.current === "local") {
-          uploadedAttachment = {
-            ...pending,
-            status: "uploaded",
-            error: undefined,
-          };
-          await saveLocalAttachment(activeDraftId, uploadedAttachment, file);
-        }
+        uploadedAttachment = payload.attachment;
 
         if (!uploadedAttachment) {
           throw new Error("Filen kunne ikke gemmes.");
@@ -448,19 +474,10 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
           pending.id,
           uploadedAttachment,
         );
-        if (storageModeRef.current === "local") {
-          await saveLocalDraft(activeDraftId, nextState, "draft");
-          setSaveStatus("saved");
-        }
         formRef.current = nextState;
         setForm(nextState);
       } catch (error) {
-        if (storageModeRef.current === "local") setSaveStatus("error");
-        if (storageModeRef.current === "local" && uploadedAttachment) {
-          await deleteLocalAttachment(activeDraftId, uploadedAttachment.id).catch(
-            () => undefined,
-          );
-        }
+        setSaveStatus("error");
         changeForm((current) =>
           replaceAttachment(current, kind, pending.id, {
             ...pending,
@@ -468,11 +485,9 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
             error: (error as Error).message,
           }),
         );
+      } finally {
+        setActiveUploads((current) => Math.max(0, current - 1));
       }
-    }
-
-    if (usedLocalStorage) {
-      onToast("Bilagene er gemt lokalt på denne enhed.");
     }
   }
 
@@ -481,51 +496,34 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
     const draftId = draftIdRef.current;
     if (attachment?.status === "uploaded" && draftId) {
       try {
-        if (storageModeRef.current === "server") {
-          const response = await fetch("/api/uploads", {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, draftId }),
-          });
-          if (response.status === 503) {
-            throw new ServerPersistenceUnavailableError();
-          }
-          if (!response.ok) {
-            throw new Error("Bilaget kunne ikke fjernes. Prøv igen.");
-          }
-        } else {
-          await deleteLocalAttachment(draftId, id);
+        const response = await fetch("/api/uploads", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, draftId }),
+        });
+        if (!response.ok) {
+          throw new Error("Bilaget kunne ikke fjernes. Prøv igen.");
         }
       } catch (error) {
-        if (storageModeRef.current === "server" && shouldUseLocalFallback(error)) {
-          switchToLocalStorage();
-          await deleteLocalAttachment(draftId, id);
-        } else {
-          onToast((error as Error).message);
-          return;
-        }
+        onToast((error as Error).message);
+        return;
       }
     }
 
-    const nextState = changeForm((current) => ({
+    changeForm((current) => ({
       ...current,
       attachments: {
         ...current.attachments,
         [kind]: current.attachments[kind].filter((file) => file.id !== id),
       },
     }));
-    if (storageModeRef.current === "local" && draftId) {
-      try {
-        await saveLocalDraft(draftId, nextState, "draft");
-        setSaveStatus("saved");
-      } catch (error) {
-        setSaveStatus("error");
-        onToast((error as Error).message);
-      }
-    }
   }
 
   async function submit() {
+    if (activeUploads > 0) {
+      onToast("Vent på, at alle bilag er uploadet, før du indsender.");
+      return;
+    }
     const currentForm = formRef.current;
     const errors = getAllErrors(currentForm);
     if (errors.length > 0) {
@@ -537,11 +535,25 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
     }
     try {
       const result = await persistDraft("submitted", currentForm);
-      if (result.mode === "local") {
-        onToast("Ansøgningen er gemt lokalt på denne enhed, men er ikke sendt til behandling.");
-        return;
+      if (
+        result.status !== "submitted" ||
+        !result.caseNumber ||
+        typeof result.versionNumber !== "number" ||
+        !result.submittedAt ||
+        !result.mode ||
+        typeof result.rowVersion !== "number"
+      ) {
+        throw new Error("Serveren returnerede ikke den indsendte version.");
       }
-      onSubmit(pruneHiddenAnswers(currentForm));
+      onSubmit(pruneHiddenAnswers(currentForm), {
+        id: result.id,
+        caseNumber: result.caseNumber,
+        status: result.status,
+        versionNumber: result.versionNumber,
+        submittedAt: result.submittedAt,
+        mode: result.mode,
+        rowVersion: result.rowVersion,
+      });
     } catch (error) {
       onToast((error as Error).message);
     }
@@ -549,30 +561,63 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
 
   async function saveDraft() {
     try {
-      const result = await persistDraft("draft", formRef.current);
+      await persistDraft("draft", formRef.current);
       onToast(
-        result.mode === "local"
-          ? "Kladden er gemt lokalt på denne enhed."
-          : "Kladden er gemt sikkert.",
+        correction
+          ? `Rettelserne til ${correction.caseNumber} er gemt sikkert.`
+          : "Kladden er gemt sikkert på din brugerkonto.",
       );
     } catch (error) {
       onToast((error as Error).message);
     }
   }
 
+  if (saveStatus === "loading") {
+    return (
+      <div className="application-page page-width">
+        <div className="application-top">
+          <button className="back-text" type="button" onClick={onBack}>
+            <ArrowLeft size={18} /> {correctionCaseNumber ? "Tilbage til sagen" : "Mine ansøgninger"}
+          </button>
+          <span><Check size={16} /> {correctionCaseNumber ? "Henter sag til rettelser…" : "Henter seneste kladde…"}</span>
+        </div>
+        <div className="form-message warning" role="status">
+          <Info size={20} />
+          <div><strong>{correctionCaseNumber ? "Klargør næste version" : "Klargør formularen"}</strong><p>{correctionCaseNumber ? "Formular og bilag hentes sikkert fra den afviste version." : "Vi kontrollerer, om du allerede har en gemt kladde."}</p></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="application-page page-width">
+        <div className="application-top">
+          <button className="back-text" type="button" onClick={onBack}>
+            <ArrowLeft size={18} /> {correctionCaseNumber ? "Tilbage til sagen" : "Mine ansøgninger"}
+          </button>
+        </div>
+        <div className="form-message error" role="alert">
+          <Info size={20} />
+          <div><strong>{correctionCaseNumber ? "Sagen kunne ikke åbnes til rettelser" : "Kladden kunne ikke hentes"}</strong><p>{loadError}</p></div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="application-page page-width">
       <div className="application-top">
         <button className="back-text" type="button" onClick={onBack}>
-          <ArrowLeft size={18} /> Mine ansøgninger
+          <ArrowLeft size={18} /> {correction ? "Tilbage til sagen" : "Mine ansøgninger"}
         </button>
-        <span><Check size={16} /> {saveStatusText(saveStatus, storageMode)}</span>
+        <span><Check size={16} /> {saveStatusText(saveStatus, Boolean(correctionCaseNumber))}</span>
       </div>
       <div className="application-title">
         <div>
-          <span className="section-label dark">Ny IT-anskaffelse</span>
-          <h1>Opret ansøgning</h1>
-          <p>{guidance?.intro ?? "Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs."}</p>
+          <span className="section-label dark">{correction ? `${correction.caseNumber} · Version ${correction.nextVersionNumber}` : "Ny IT-anskaffelse"}</span>
+          <h1>{correction ? "Ret og genindsend ansøgning" : "Opret ansøgning"}</h1>
+          <p>{correction ? `Version ${correction.currentVersionNumber} forbliver låst. Dine rettelser gemmes som en ny version, når du genindsender.${correction.rejection?.comment ? ` Afvisningsgrund fra ${correction.rejection.approverName}: ${correction.rejection.comment}` : ""}` : guidance?.intro ?? "Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs."}</p>
         </div>
         <div className="application-progress"><strong>{step + 1}</strong><span>af {steps.length}</span></div>
       </div>
@@ -597,7 +642,7 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
               </button>
             );
           })}
-          <div className="rail-help"><CircleHelp size={20} /><div><strong>Brug for hjælp?</strong><p>Book et formøde med din lokale konsulent.</p><button type="button" onClick={() => onToast("Formøde er klar til booking")}>Book formøde</button></div></div>
+          <div className="rail-help"><CircleHelp size={20} /><div><strong>Brug for hjælp?</strong><p>Book et formøde med din lokale konsulent.</p><a href="mailto:ckra@kalundborg.dk?subject=Ønske%20om%20D-GITA-formøde">Book formøde</a></div></div>
         </aside>
 
         <section className="application-sheet">
@@ -845,7 +890,7 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
 
             {step === 8 ? (
               <>
-                <Question title="52. Angiv chef" hint="Lederen modtager en godkendelsesmail i Outlook."><select className={cx("clean-input", errorFor("approvingLeader") && "invalid")} value={form.approvingLeader} onChange={(event) => update("approvingLeader", event.target.value)}><option>Peter Bjerre Ahlgren</option><option>Partheepan Vijayamohan</option><option>Anita Mark Vig Lauridsen</option></select><FieldErrorText message={errorFor("approvingLeader")} /></Question>
+                <Question title="52. Angiv chef" hint="Lederen modtager en godkendelsesmail i Outlook."><select className={cx("clean-input", errorFor("approvingLeader") && "invalid")} value={form.approvingLeaderId} onChange={(event) => { const leader = APPROVING_LEADERS.find((candidate) => candidate.id === event.target.value); if (!leader) return; changeForm((current) => ({ ...current, approvingLeaderId: leader.id, approvingLeader: leader.name })); setSaveStatus("idle"); }}>{APPROVING_LEADERS.map((leader) => <option key={leader.id} value={leader.id}>{leader.name}</option>)}</select><FieldErrorText message={errorFor("approvingLeader")} /></Question>
                 <Question title="53. Har du andre relevante bemærkninger?"><textarea className="clean-input" rows={5} placeholder="Tilføj eventuelle bemærkninger..." value={form.remarks} onChange={(event) => update("remarks", event.target.value)} /></Question>
                 <div className="outlook-note"><Mail size={20} /><div><strong>Godkendelsen klargøres til Outlook</strong><p>Lederen får et versionslåst beslutningsgrundlag og et direkte link til sagen, når mailintegrationen forbindes.</p></div></div>
               </>
@@ -855,10 +900,10 @@ export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Pro
           </div>
 
           <div className="sheet-footer">
-            <button className="line-button" type="button" disabled={saveStatus === "saving"} onClick={() => void saveDraft()}>{saveStatus === "saving" ? "Gemmer…" : "Gem kladde"}</button>
+            <button className="line-button" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void saveDraft()}>{activeUploads > 0 ? "Uploader bilag…" : saveStatus === "saving" ? "Gemmer…" : correction ? "Gem rettelser" : "Gem kladde"}</button>
             <div>
               {step > 0 ? <button className="text-nav-button" type="button" onClick={() => goToStep(step - 1)}><ArrowLeft size={17} /> Forrige</button> : null}
-              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button green" type="button" disabled={saveStatus === "saving"} onClick={() => void submit()}><Send size={17} /> Gem og indsend</button>}
+              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button green" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void submit()}><Send size={17} /> {activeUploads > 0 ? "Uploader bilag…" : correction ? `Genindsend version ${correction.nextVersionNumber}` : "Gem og indsend"}</button>}
             </div>
           </div>
         </section>
@@ -871,34 +916,14 @@ const yesNoOptions = [{ value: "ja", label: "Ja" }, { value: "nej", label: "Nej"
 
 function saveStatusText(
   status: "loading" | "idle" | "saving" | "saved" | "error",
-  storageMode: StorageMode,
+  correction: boolean,
 ) {
-  if (status === "loading") return "Henter seneste kladde…";
-  if (status === "saving") {
-    return storageMode === "local"
-      ? "Gemmer kladde på denne enhed…"
-      : "Gemmer kladde…";
-  }
-  if (status === "saved") {
-    return storageMode === "local"
-      ? "Kladden er gemt på denne enhed"
-      : "Kladden er gemt";
-  }
-  if (status === "error") {
-    return storageMode === "local"
-      ? "Kladde kunne ikke gemmes på denne enhed"
-      : "Kladde kunne ikke hentes eller gemmes";
-  }
-  return storageMode === "local"
-    ? "Klar til at gemme på denne enhed"
-    : "Klar til at gemme";
-}
-
-function shouldUseLocalFallback(error: unknown) {
-  return (
-    error instanceof ServerPersistenceUnavailableError ||
-    error instanceof TypeError
-  );
+  const noun = correction ? "rettelser" : "kladde";
+  if (status === "loading") return correction ? "Henter sag til rettelser…" : "Henter seneste kladde…";
+  if (status === "saving") return `Gemmer ${noun}…`;
+  if (status === "saved") return `${correction ? "Rettelserne" : "Kladden"} er gemt sikkert`;
+  if (status === "error") return `${correction ? "Rettelser" : "Kladde"} kunne ikke hentes eller gemmes`;
+  return "Klar til at gemme";
 }
 
 function replaceAttachment(
@@ -1001,7 +1026,7 @@ function ReviewApplication({ form, error, onEdit, onConsent }: { form: Applicati
     ["Godkendende chef", form.approvingLeader, 8],
   ];
   const warnings: FieldError[] = [getStepWarnings(form, 5), getStepWarnings(form, 7)].flat();
-  return <div className="review-block"><div className="review-status"><CheckCircle2 size={25} /><div><strong>Klar til kontrol</strong><p>Den indsendte version låses. PDF-kvittering og Outlook-mail aktiveres, når backend-integrationerne forbindes.</p></div></div>{warnings.length > 0 ? <FormMessage tone="warning" title="Ansøgningen kan indsendes med opmærksomhedspunkter" messages={warnings.map((warning) => warning.message)} /> : null}{rows.map(([label, value, targetStep]) => <div className="review-line" key={label}><span>{label}</span><strong>{value || "Ikke angivet"}</strong><button type="button" onClick={() => onEdit(targetStep)}>Redigér</button></div>)}<label className="consent-check"><input type="checkbox" checked={form.consent} onChange={(event) => onConsent(event.target.checked)} /><span>{form.consent ? <Check size={14} /> : null}</span>Jeg har kontrolleret oplysningerne og de vedlagte bilag.</label><FieldErrorText message={error} /></div>;
+  return <div className="review-block"><div className="review-status"><CheckCircle2 size={25} /><div><strong>Klar til kontrol</strong><p>Den indsendte version låses i databasen. PDF-kvitteringen kan hentes på sagen, og en kvitteringsmail lægges i den sikre Outlook-kø.</p></div></div>{warnings.length > 0 ? <FormMessage tone="warning" title="Ansøgningen kan indsendes med opmærksomhedspunkter" messages={warnings.map((warning) => warning.message)} /> : null}{rows.map(([label, value, targetStep]) => <div className="review-line" key={label}><span>{label}</span><strong>{value || "Ikke angivet"}</strong><button type="button" onClick={() => onEdit(targetStep)}>Redigér</button></div>)}<label className="consent-check"><input type="checkbox" checked={form.consent} onChange={(event) => onConsent(event.target.checked)} /><span>{form.consent ? <Check size={14} /> : null}</span>Jeg har kontrolleret oplysningerne og de vedlagte bilag.</label><FieldErrorText message={error} /></div>;
 }
 
 function formatDate(value: string) {

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canOpenStep,
   createAttachmentDraft,
+  demoApplicationState,
   getFinanceTotal,
   getStepErrors,
   getStepWarnings,
@@ -16,8 +17,16 @@ import {
 import { normalizeSearchText, searchCatalog } from "../features/catalog/search.ts";
 
 function state(overrides = {}) {
-  return structuredClone({ ...initialApplicationState, ...overrides });
+  return structuredClone({ ...demoApplicationState, ...overrides });
 }
+
+test("en ny produktionsansøgning indeholder ingen demooplysninger", () => {
+  assert.equal(initialApplicationState.catalogQuery, "");
+  assert.equal(initialApplicationState.contactPerson, "");
+  assert.equal(initialApplicationState.department, "");
+  assert.equal(initialApplicationState.purpose, "");
+  assert.equal(initialApplicationState.approvingLeaderId, "");
+});
 
 test("underspørgsmål følger de dokumenterede Power Pages-regler", () => {
   const base = state();
@@ -170,7 +179,7 @@ test("filpolitik håndhæver type og 25 MB", () => {
   const failedAgreement = state({
     hasDpa: "ja",
     attachments: {
-      ...initialApplicationState.attachments,
+      ...demoApplicationState.attachments,
       "data-processing-agreement": [
         createAttachmentDraft("data-processing-agreement", {
           name: "virus.exe",
@@ -190,7 +199,7 @@ test("filpolitik håndhæver type og 25 MB", () => {
   const selectedAgreement = state({
     hasDpa: "ja",
     attachments: {
-      ...initialApplicationState.attachments,
+      ...demoApplicationState.attachments,
       "data-processing-agreement": [
         createAttachmentDraft("data-processing-agreement", {
           name: "aftale.pdf",
@@ -222,6 +231,18 @@ test("fremtidige trin låses af den første ugyldige sektion", () => {
     },
   });
   assert.equal(canOpenStep(completeFirstStep, 1), true);
+});
+
+test("godkendende chef bindes til et stabilt katalog-id", () => {
+  assert.equal(getStepErrors(state(), 8).length, 0);
+  const manipulated = state({
+    approvingLeaderId: "ukendt-bruger-id",
+    approvingLeader: "Peter Bjerre Ahlgren",
+  });
+  assert.equal(
+    getStepErrors(manipulated, 8).some((error) => error.field === "approvingLeader"),
+    true,
+  );
 });
 
 test("katalogsøgning er accent- og case-insensitiv og prioriterer Kalundborg", () => {

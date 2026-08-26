@@ -34,6 +34,9 @@ test("server-renderer den færdige D-GITA-portal", async () => {
   assert.match(html, /D-GITA/);
   assert.match(html, /Kalundborg Kommune/);
   assert.match(html, /Opret ansøgning/);
+  assert.match(html, /Skift testrolle/);
+  assert.match(html, /D-GITA konsulent/);
+  assert.match(html, />Admin</);
   assert.match(html, /Partheepan Vijayamohan/);
   assert.match(html, /Casper Kjeldsen Ravn/);
   assert.match(html, /og:image[^>]+http:\/\/localhost:3000\/og-editorial\.png/i);

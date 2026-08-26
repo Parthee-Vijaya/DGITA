@@ -82,6 +82,11 @@ type Props = {
   onBack: () => void;
   onSubmit: (snapshot: Record<string, unknown>) => void;
   onToast: (message: string) => void;
+  guidance?: {
+    intro?: string;
+    catalog?: string;
+    marketResearch?: string;
+  };
 };
 
 type StorageMode = "server" | "local";
@@ -93,7 +98,7 @@ class ServerPersistenceUnavailableError extends Error {
   }
 }
 
-export function ApplicationFormView({ onBack, onSubmit, onToast }: Props) {
+export function ApplicationFormView({ onBack, onSubmit, onToast, guidance }: Props) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ApplicationFormState>(() =>
     structuredClone(initialApplicationState),
@@ -567,7 +572,7 @@ export function ApplicationFormView({ onBack, onSubmit, onToast }: Props) {
         <div>
           <span className="section-label dark">Ny IT-anskaffelse</span>
           <h1>Opret ansøgning</h1>
-          <p>Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs.</p>
+          <p>{guidance?.intro ?? "Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs."}</p>
         </div>
         <div className="application-progress"><strong>{step + 1}</strong><span>af {steps.length}</span></div>
       </div>
@@ -647,7 +652,7 @@ export function ApplicationFormView({ onBack, onSubmit, onToast }: Props) {
                 </Question>
 
                 {isFieldVisible("catalogQuery", form) ? (
-                  <Question title="3. Søg IT-systemnavnet i KITOS" hint="Resultatet viser samtidig, om systemet bruges i Kalundborg.">
+                  <Question title="3. Søg IT-systemnavnet i KITOS" hint={guidance?.catalog ?? "Resultatet viser samtidig, om systemet bruges i Kalundborg."}>
                     <div className="lookup-field">
                       <Search size={18} />
                       <input
@@ -768,7 +773,7 @@ export function ApplicationFormView({ onBack, onSubmit, onToast }: Props) {
             {step === 2 ? (
               <>
                 <Question title="25. Anskaffelsesform" hint="Anskaffelsesformen har betydning for kravspecifikationens detaljeringsgrad."><select className={cx("clean-input", errorFor("acquisitionMethod") && "invalid")} value={form.acquisitionMethod} onChange={(event) => update("acquisitionMethod", event.target.value)}><option>DIGIT udbud/aftale</option><option>Direkte tildeling</option><option>Gratis</option><option>KOMBIT/KL/Offentligt projekt</option><option>SKI-aftale</option></select><FieldErrorText message={errorFor("acquisitionMethod")} /></Question>
-                <Question title="26. Er der gennemført markedsafdækning?" hint="Har du undersøgt, hvilke løsninger der bedst matcher behov, pris og kvalitet?"><Choice value={form.marketResearch} onChange={(value) => setYesNo("marketResearch", value)} options={yesNoOptions} /></Question>
+                <Question title="26. Er der gennemført markedsafdækning?" hint={guidance?.marketResearch ?? "Har du undersøgt, hvilke løsninger der bedst matcher behov, pris og kvalitet?"}><Choice value={form.marketResearch} onChange={(value) => setYesNo("marketResearch", value)} options={yesNoOptions} /></Question>
                 {isFieldVisible("marketResearchSystems", form) ? <Question title="26.1 Hvilke IT-systemer er afdækket?"><textarea className={cx("clean-input", errorFor("marketResearchSystems") && "invalid")} rows={4} value={form.marketResearchSystems} onChange={(event) => update("marketResearchSystems", event.target.value)} /><FieldErrorText message={errorFor("marketResearchSystems")} /></Question> : null}
                 <Question title="27. Nyanskaffelse / tilkøb"><Choice value={form.acquisitionType} onChange={(value) => update("acquisitionType", value as ApplicationFormState["acquisitionType"])} options={[{ value: "nyanskaffelse", label: "Nyanskaffelse" }, { value: "tilkøb", label: "Tilkøb" }]} /></Question>
                 {isFieldVisible("relatedSystem", form) ? <Question title="27.1 Hvilket eksisterende system vedrører tilkøbet?"><input className={cx("clean-input", errorFor("relatedSystem") && "invalid")} value={form.relatedSystem} onChange={(event) => update("relatedSystem", event.target.value)} /><FieldErrorText message={errorFor("relatedSystem")} /></Question> : null}

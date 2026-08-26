@@ -3,22 +3,31 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_CONTENT,
+  DEFAULT_IMAGES,
   EMPTY_D_GITA_APPROVAL,
   editContentEntry,
+  editImageEntry,
   normalizeDgitaApproval,
   type ContentEntry,
   type DgitaApproval,
   type FieldComment,
+  type ImageEntry,
   type WorkspaceViewer,
 } from "./model";
 
-const STORAGE_KEY = "dgita-demo-workspace-v2";
+const STORAGE_KEY = "dgita-demo-workspace-v3";
+const LEGACY_STORAGE_KEY = "dgita-demo-workspace-v2";
 
 type StoredWorkspace = {
-  version: 2;
+  version: 3;
   content: ContentEntry[];
+  images: ImageEntry[];
   approvals: Record<string, DgitaApproval>;
   fieldComments: FieldComment[];
+};
+
+type LegacyStoredWorkspace = Omit<StoredWorkspace, "version" | "images"> & {
+  version: 2;
 };
 
 const DEFAULT_APPROVALS: Record<string, DgitaApproval> = {
@@ -38,8 +47,9 @@ const DEFAULT_APPROVALS: Record<string, DgitaApproval> = {
 };
 
 const INITIAL_WORKSPACE: StoredWorkspace = {
-  version: 2,
+  version: 3,
   content: DEFAULT_CONTENT,
+  images: DEFAULT_IMAGES,
   approvals: DEFAULT_APPROVALS,
   fieldComments: [],
 };
@@ -52,12 +62,41 @@ function isStoredWorkspace(value: unknown): value is StoredWorkspace {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<StoredWorkspace>;
   return (
+    candidate.version === 3 &&
+    Array.isArray(candidate.content) &&
+    Array.isArray(candidate.images) &&
+    candidate.approvals !== null &&
+    typeof candidate.approvals === "object" &&
+    Array.isArray(candidate.fieldComments)
+  );
+}
+
+function isLegacyStoredWorkspace(value: unknown): value is LegacyStoredWorkspace {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<LegacyStoredWorkspace>;
+  return (
     candidate.version === 2 &&
     Array.isArray(candidate.content) &&
     candidate.approvals !== null &&
     typeof candidate.approvals === "object" &&
     Array.isArray(candidate.fieldComments)
   );
+}
+
+function mergeWorkspaceDefaults(workspace: StoredWorkspace): StoredWorkspace {
+  const contentIds = new Set(workspace.content.map((entry) => entry.id));
+  const imageIds = new Set(workspace.images.map((entry) => entry.id));
+  return {
+    ...workspace,
+    content: [
+      ...workspace.content,
+      ...DEFAULT_CONTENT.filter((entry) => !contentIds.has(entry.id)),
+    ],
+    images: [
+      ...workspace.images,
+      ...DEFAULT_IMAGES.filter((entry) => !imageIds.has(entry.id)),
+    ],
+  };
 }
 
 function persist(workspace: StoredWorkspace) {
@@ -74,12 +113,21 @@ export function useDemoWorkspace() {
   useEffect(() => {
     let cancelled = false;
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const raw = window.localStorage.getItem(STORAGE_KEY)
+        ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (!raw) return;
       const parsed: unknown = JSON.parse(raw);
-      if (isStoredWorkspace(parsed)) {
+      const restored = isStoredWorkspace(parsed)
+        ? mergeWorkspaceDefaults(parsed)
+        : isLegacyStoredWorkspace(parsed)
+          ? mergeWorkspaceDefaults({ ...parsed, version: 3, images: structuredClone(DEFAULT_IMAGES) })
+          : null;
+      if (restored) {
         window.setTimeout(() => {
-          if (!cancelled) setWorkspace(parsed);
+          if (!cancelled) {
+            setWorkspace(restored);
+            persist(restored);
+          }
         }, 0);
       }
     } catch {
@@ -138,6 +186,21 @@ export function useDemoWorkspace() {
     return true;
   }, [commit]);
 
+  const updateImage = useCallback((entry: ImageEntry, viewer: WorkspaceViewer) => {
+    if (viewer.role !== "admin") return false;
+    commit((current) => ({
+      ...current,
+      images: editImageEntry(viewer, current.images, entry),
+    }));
+    return true;
+  }, [commit]);
+
+  const resetImages = useCallback((viewer: WorkspaceViewer) => {
+    if (viewer.role !== "admin") return false;
+    commit((current) => ({ ...current, images: structuredClone(DEFAULT_IMAGES) }));
+    return true;
+  }, [commit]);
+
   const updateApproval = useCallback((caseId: string, approval: DgitaApproval, viewer: WorkspaceViewer) => {
     if (viewer.role === "user") return false;
     commit((current) => ({
@@ -165,12 +228,15 @@ export function useDemoWorkspace() {
 
   return {
     content: workspace.content,
+    images: workspace.images,
     approvals: workspace.approvals,
     fieldComments: workspace.fieldComments,
     updateContent,
     addContent,
     removeContent,
     resetContent,
+    updateImage,
+    resetImages,
     updateApproval,
     addFieldComment,
   };

@@ -338,6 +338,36 @@ export type ContentEntry = {
   updatedBy?: string;
 };
 
+export type ImageEntry = {
+  id: string;
+  src: string;
+  alt: string;
+  location: string;
+  updatedAt?: string;
+  updatedBy?: string;
+};
+
+export const DEFAULT_IMAGES: ImageEntry[] = [
+  {
+    id: "home.hero.image",
+    src: "/dgita-hero.png",
+    alt: "Kommunale medarbejdere samarbejder om en IT-anskaffelse",
+    location: "Forside · Hero",
+  },
+  {
+    id: "home.help.image",
+    src: "/dgita-help.png",
+    alt: "En D-GITA-konsulent hjælper en kollega",
+    location: "Forside · Hjælp",
+  },
+  {
+    id: "knowledge.hero.image",
+    src: "/dgita-help.png",
+    alt: "En D-GITA-konsulent vejleder en kommunal kollega",
+    location: "Vejledning & FAQ · Hero",
+  },
+];
+
 export const CONTENT_CATEGORY_LABELS: Record<ContentCategory, string> = {
   portal_text: "Portaltekster",
   form_help: "Hjælpetekster",
@@ -346,7 +376,17 @@ export const CONTENT_CATEGORY_LABELS: Record<ContentCategory, string> = {
   data_processor: "Databehandlerkrav",
 };
 
+function portalText(
+  id: string,
+  title: string,
+  body: string,
+  location: string,
+): ContentEntry {
+  return { id, category: "portal_text", title, body, location, published: true };
+}
+
 export const DEFAULT_CONTENT: ContentEntry[] = [
+  portalText("home.hero.eyebrow", "Hero · overlinje", "Kalundborg Kommune · D-GITA", "Forside · Hero"),
   {
     id: "home.hero.title",
     category: "portal_text",
@@ -363,6 +403,20 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     location: "Forside · Hero",
     published: true,
   },
+  portalText("home.hero.note", "Hero · bemærkning", "Portalen bruges til køb under udbudsgrænsen.", "Forside · Hero"),
+  portalText("home.intro.eyebrow", "Introduktion · overlinje", "Fra idé til sikker anskaffelse", "Forside · Introduktion"),
+  portalText("home.intro.title", "Introduktion · overskrift", "Portalen samler hele forløbet.", "Forside · Introduktion"),
+  portalText("home.intro.body", "Introduktion · tekst", "Du beskriver behovet én gang. Derefter hjælper D-GITA-konsulenten med marked, arkitektur, sikkerhed, økonomi, dokumentation og ledergodkendelse.", "Forside · Introduktion"),
+  portalText("home.process.describe.title", "Proces 1 · titel", "Beskriv behovet", "Forside · Proces"),
+  portalText("home.process.describe.body", "Proces 1 · tekst", "Svar på de relevante spørgsmål om systemet, arbejdsprocesserne og værdien for kommunen.", "Forside · Proces"),
+  portalText("home.process.advise.title", "Proces 2 · titel", "Få faglig sparring", "Forside · Proces"),
+  portalText("home.process.advise.body", "Proces 2 · tekst", "Din lokale D-GITA-konsulent gennemgår anskaffelsesform, risiko, data og IT-krav.", "Forside · Proces"),
+  portalText("home.process.approve.title", "Proces 3 · titel", "Indhent godkendelse", "Forside · Proces"),
+  portalText("home.process.approve.body", "Proces 3 · tekst", "Lederen modtager et samlet, versionslåst beslutningsgrundlag og godkender digitalt.", "Forside · Proces"),
+  portalText("home.process.document.title", "Proces 4 · titel", "Gem dokumentationen", "Forside · Proces"),
+  portalText("home.process.document.body", "Proces 4 · tekst", "Kvitteringer, bilag, kommentarer og statusændringer bliver samlet på sagen.", "Forside · Proces"),
+  portalText("home.help.eyebrow", "Hjælp · overlinje", "Har du brug for hjælp?", "Forside · Hjælp"),
+  portalText("home.help.title", "Hjælp · overskrift", "Få afklaring, før du udfylder ansøgningen.", "Forside · Hjælp"),
   {
     id: "home.help.body",
     category: "portal_text",
@@ -371,6 +425,22 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     location: "Forside · Hjælp",
     published: true,
   },
+  portalText("contact.local.role", "Kontakt · rolle", "Din lokale D-GITA-konsulent", "Forside · Kontakt"),
+  portalText("contact.local.name", "Kontakt · navn", "Casper Kjeldsen Ravn", "Forside · Kontakt"),
+  portalText("contact.local.email", "Kontakt · e-mail", "ckra@kalundborg.dk", "Forside · Kontakt"),
+  portalText("home.resources.eyebrow", "Ressourcer · overlinje", "Viden og vejledning", "Forside · Ressourcer"),
+  portalText("home.resources.title", "Ressourcer · overskrift", "Genveje til et bedre forløb", "Forside · Ressourcer"),
+  portalText("home.resources.about.title", "Genvej · Om D-GITA", "Om D-GITA", "Forside · Ressourcer"),
+  portalText("home.resources.about.body", "Genvej · Om D-GITA tekst", "Læs om portalen og processen.", "Forside · Ressourcer"),
+  portalText("home.resources.guide.title", "Genvej · Vejledning", "Vejledning / FAQ", "Forside · Ressourcer"),
+  portalText("home.resources.guide.body", "Genvej · Vejledning tekst", "Begreber, funktioner og svar undervejs.", "Forside · Ressourcer"),
+  portalText("home.resources.links.title", "Genvej · Links", "Nyttige links", "Forside · Ressourcer"),
+  portalText("home.resources.links.body", "Genvej · Links tekst", "KITOS, databehandleraftaler og lokale skabeloner.", "Forside · Ressourcer"),
+  portalText("home.resources.municipality.title", "Genvej · Kommune", "Info fra din kommune", "Forside · Ressourcer"),
+  portalText("home.resources.municipality.body", "Genvej · Kommune tekst", "Særlige krav og information fra Kalundborg.", "Forside · Ressourcer"),
+  portalText("home.resources.changelog.title", "Genvej · Nyheder", "Ny funktionalitet", "Forside · Ressourcer"),
+  portalText("home.resources.changelog.body", "Genvej · Nyheder tekst", "Se de seneste ændringer i portalen.", "Forside · Ressourcer"),
+  portalText("knowledge.hero.eyebrow", "Vejledning · hero-overlinje", "Viden · Kalundborg Kommune", "Vejledning & FAQ · Hero"),
   {
     id: "knowledge.hero.title",
     category: "portal_text",
@@ -387,6 +457,8 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     location: "Vejledning & FAQ · Hero",
     published: true,
   },
+  portalText("knowledge.intro.eyebrow", "Introduktion · overlinje", "Information", "Vejledning & FAQ · Introduktion"),
+  portalText("knowledge.intro.title", "Introduktion · overskrift", "Kom godt fra behov til færdig sag.", "Vejledning & FAQ · Introduktion"),
   {
     id: "knowledge.info",
     category: "portal_text",
@@ -395,6 +467,7 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     location: "Vejledning & FAQ · Introduktion",
     published: true,
   },
+  portalText("knowledge.tip.title", "Tip · overskrift", "Vigtigt tip", "Vejledning & FAQ · Tip"),
   {
     id: "knowledge.tip",
     category: "portal_text",
@@ -403,6 +476,28 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
     location: "Vejledning & FAQ · Tip",
     published: true,
   },
+  portalText("knowledge.process.eyebrow", "Proces · overlinje", "Det visuelle forløb", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.title", "Proces · overskrift", "Tre roller. Ét fælles beslutningsgrundlag.", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.applicant.role", "Proces 1 · rolle", "Anmoder", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.applicant.title", "Proces 1 · titel", "Opret ansøgningen", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.leader.role", "Proces 2 · rolle", "Leder", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.leader.title", "Proces 2 · titel", "Godkend grundlaget", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.consultant.role", "Proces 3 · rolle", "D-GITA", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.process.consultant.title", "Proces 3 · titel", "Vurdér og færdigbehandl", "Vejledning & FAQ · Proces"),
+  portalText("knowledge.about.eyebrow", "Om portalen · overlinje", "Om portalen", "Vejledning & FAQ · Om portalen"),
+  portalText("knowledge.about.title", "Om portalen · overskrift", "Den Gode IT-Anskaffelse", "Vejledning & FAQ · Om portalen"),
+  portalText("knowledge.consultant.eyebrow", "Konsulent · overlinje", "Rådgivning", "Vejledning & FAQ · Konsulentrollen"),
+  portalText("knowledge.consultant.title", "Konsulent · overskrift", "D-GITA-konsulenten", "Vejledning & FAQ · Konsulentrollen"),
+  portalText("knowledge.library.eyebrow", "Bibliotek · overlinje", "Ordbog og svar", "Vejledning & FAQ · Bibliotek"),
+  portalText("knowledge.library.title", "Bibliotek · overskrift", "Find det, du har brug for", "Vejledning & FAQ · Bibliotek"),
+  portalText("knowledge.library.body", "Bibliotek · søgehjælp", "Søg på fx kontrakt, ESDH, risikovurdering, leder eller databehandleraftale.", "Vejledning & FAQ · Bibliotek"),
+  portalText("knowledge.processor.eyebrow", "Databehandlerkrav · overlinje", "Krav og dokumentation", "Vejledning & FAQ · Databehandlerkrav"),
+  portalText("knowledge.processor.title", "Databehandlerkrav · overskrift", "Databehandlerkrav", "Vejledning & FAQ · Databehandlerkrav"),
+  portalText("knowledge.links.eyebrow", "Links · overlinje", "Generelle og lokale genveje", "Vejledning & FAQ · Links"),
+  portalText("knowledge.links.title", "Links · overskrift", "Nyttige links", "Vejledning & FAQ · Links"),
+  portalText("knowledge.contact.eyebrow", "Kontakt · overlinje", "Stadig i tvivl?", "Vejledning & FAQ · Kontakt"),
+  portalText("knowledge.contact.title", "Kontakt · overskrift", "Tag D-GITA med fra begyndelsen.", "Vejledning & FAQ · Kontakt"),
+  portalText("knowledge.contact.body", "Kontakt · tekst", "Fortæl kort, hvad du har brug for hjælp til — fx at finde et system, skaffe kontrakt eller dokumentation eller komme i gang med din første ansøgning.", "Vejledning & FAQ · Kontakt"),
   {
     id: "knowledge.about",
     category: "portal_text",
@@ -702,7 +797,9 @@ export const DEFAULT_CONTENT: ContentEntry[] = [
 ];
 
 export function contentBody(entries: ContentEntry[], id: string, fallback: string) {
-  return entries.find((entry) => entry.id === id && entry.published)?.body ?? fallback;
+  const entry = entries.find((candidate) => candidate.id === id);
+  if (!entry) return fallback;
+  return entry.published ? entry.body : "";
 }
 
 export function isSafeContentUrl(value: string) {
@@ -712,6 +809,40 @@ export function isSafeContentUrl(value: string) {
     trimmed.startsWith("/") && !trimmed.startsWith("//") ||
     trimmed.startsWith("https://") ||
     trimmed.startsWith("mailto:")
+  );
+}
+
+export function isSafeImageUrl(value: string) {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("/") && !trimmed.startsWith("//") ||
+    trimmed.startsWith("https://") ||
+    /^data:image\/(?:avif|gif|jpeg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(trimmed)
+  );
+}
+
+export function editImageEntry(
+  viewer: WorkspaceViewer,
+  entries: ImageEntry[],
+  edited: ImageEntry,
+  updatedAt = new Date().toISOString(),
+) {
+  if (viewer.role !== "admin") {
+    throw new Error("Kun administratorer må redigere portalbilleder.");
+  }
+  if (!isSafeImageUrl(edited.src)) {
+    throw new Error("Billedadressen er ikke tilladt.");
+  }
+  return entries.map((current) =>
+    current.id === edited.id
+      ? {
+          ...current,
+          src: edited.src.trim(),
+          alt: edited.alt.trim(),
+          updatedAt,
+          updatedBy: viewer.displayName,
+        }
+      : current,
   );
 }
 

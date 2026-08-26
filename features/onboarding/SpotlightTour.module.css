@@ -1,0 +1,251 @@
+.tourRoot {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  color: #17221d;
+}
+
+.interactionShield,
+.fallbackScrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+
+.interactionShield {
+  background: transparent;
+}
+
+.fallbackScrim {
+  background: rgb(10 20 16 / 72%);
+  backdrop-filter: blur(2px);
+}
+
+.spotlight {
+  position: fixed;
+  z-index: 1;
+  border: 2px solid #d3ff63;
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 9999px rgb(10 20 16 / 72%),
+    0 0 0 5px rgb(211 255 99 / 22%),
+    0 14px 45px rgb(0 0 0 / 25%);
+  pointer-events: none;
+  transition: top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease;
+}
+
+.dialog {
+  position: fixed;
+  z-index: 2;
+  width: min(400px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 25px;
+  border: 1px solid rgb(25 54 43 / 14%);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 22px 70px rgb(0 0 0 / 28%);
+  pointer-events: auto;
+  outline: none;
+}
+
+.dialog:focus-visible {
+  box-shadow:
+    0 0 0 4px rgb(68 112 94 / 26%),
+    0 22px 70px rgb(0 0 0 / 28%);
+}
+
+.centeredDialog {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.closeButton {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f4f2;
+  color: #263a31;
+  font: inherit;
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.closeButton:hover {
+  background: #e4eae6;
+}
+
+.closeButton:focus-visible,
+.skipButton:focus-visible,
+.secondaryButton:focus-visible,
+.primaryButton:focus-visible {
+  outline: 3px solid rgb(45 100 79 / 32%);
+  outline-offset: 2px;
+}
+
+.progressRow {
+  display: flex;
+  min-height: 22px;
+  margin-right: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.stepLabel {
+  color: #547064;
+  font-size: 0.75rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progressDots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.progressDots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #cfd9d4;
+  transition: width 160ms ease, background 160ms ease;
+}
+
+.progressDots .activeDot {
+  width: 20px;
+  background: #2d644f;
+}
+
+.dialog h2 {
+  margin: 18px 42px 9px 0;
+  color: #17221d;
+  font-size: clamp(1.3rem, 4vw, 1.65rem);
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+}
+
+.body {
+  color: #52645c;
+  font-size: 0.95rem;
+  line-height: 1.62;
+}
+
+.body > :first-child {
+  margin-top: 0;
+}
+
+.body > :last-child {
+  margin-bottom: 0;
+}
+
+.missingTarget {
+  margin: 15px 0 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: #f4f1e8;
+  color: #675d3f;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.actions,
+.stepActions,
+.singleAction {
+  display: flex;
+  align-items: center;
+}
+
+.actions {
+  margin-top: 23px;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.stepActions {
+  gap: 9px;
+}
+
+.singleAction {
+  margin-top: 22px;
+  justify-content: flex-end;
+}
+
+.skipButton,
+.secondaryButton,
+.primaryButton {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.skipButton {
+  padding-inline: 2px;
+  border: 0;
+  background: transparent;
+  color: #64766e;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.secondaryButton {
+  border: 1px solid #cbd5d0;
+  background: #fff;
+  color: #294137;
+}
+
+.secondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.primaryButton {
+  border: 1px solid #234f3e;
+  background: #234f3e;
+  color: #fff;
+}
+
+.primaryButton:hover {
+  border-color: #183a2d;
+  background: #183a2d;
+}
+
+@media (max-width: 540px) {
+  .dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    padding: 21px;
+  }
+
+  .actions {
+    align-items: flex-end;
+  }
+
+  .stepActions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight,
+  .progressDots span {
+    transition: none;
+  }
+}

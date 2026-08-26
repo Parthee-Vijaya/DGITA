@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   DEFAULT_CONTENT,
+  DEFAULT_IMAGES,
   DEMO_CASES,
   DEMO_VIEWERS,
   EMPTY_D_GITA_APPROVAL,
@@ -11,8 +12,10 @@ import {
   canViewCase,
   capabilitiesFor,
   editContentEntry,
+  editImageEntry,
   filterCasesForViewer,
   isSafeContentUrl,
+  isSafeImageUrl,
   normalizeDgitaApproval,
   projectCaseForViewer,
   resolveAccessibleCase,
@@ -129,3 +132,25 @@ test("adminlinks afviser eksekverbare og protokol-relative URL'er", () => {
   assert.equal(isSafeContentUrl("//evil.example"), false);
 });
 
+test("admin kan erstatte portalbilleder, mens andre roller afvises", () => {
+  const original = DEFAULT_IMAGES[0];
+  const edited = editImageEntry(
+    DEMO_VIEWERS.admin,
+    DEFAULT_IMAGES,
+    { ...original, src: "https://images.example.dk/dgita.webp", alt: "Nyt motiv" },
+    "2026-08-26T14:00:00.000Z",
+  ).find((entry) => entry.id === original.id);
+  assert.equal(edited?.src, "https://images.example.dk/dgita.webp");
+  assert.equal(edited?.alt, "Nyt motiv");
+  assert.equal(edited?.updatedBy, DEMO_VIEWERS.admin.displayName);
+  assert.throws(() => editImageEntry(DEMO_VIEWERS.user, DEFAULT_IMAGES, original));
+});
+
+test("portalbilleder accepterer kun sikre billedkilder", () => {
+  assert.equal(isSafeImageUrl("/dgita-hero.png"), true);
+  assert.equal(isSafeImageUrl("https://images.example.dk/dgita.webp"), true);
+  assert.equal(isSafeImageUrl("data:image/png;base64,aGVq"), true);
+  assert.equal(isSafeImageUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeImageUrl("data:text/html;base64,aGVq"), false);
+  assert.equal(isSafeImageUrl("//evil.example/image.png"), false);
+});

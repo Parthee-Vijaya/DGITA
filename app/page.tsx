@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   ArrowLeft,
   ArrowRight,
@@ -28,6 +27,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Paperclip,
+  PencilLine,
   Plus,
   ReceiptText,
   RotateCcw,
@@ -44,8 +44,20 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApplicationFormView } from "../features/application/ApplicationFormView";
+import {
+  CollectionEditButton,
+  EditableText,
+  EditorDrawer,
+  EditorToolbar,
+  ManagedImage,
+  type EditorSelection,
+} from "../features/editor/EditorMode";
+import {
+  SpotlightTour,
+  type SpotlightTourStep,
+} from "../features/onboarding/SpotlightTour";
 import {
   COMMENTABLE_APPLICATION_FIELDS,
   CONTENT_CATEGORY_LABELS,
@@ -68,11 +80,13 @@ import {
   type ContentEntry,
   type DgitaApproval,
   type FieldComment,
+  type ImageEntry,
   type Phase,
   type WorkspaceArea,
   type WorkspaceRole,
   type WorkspaceViewer,
 } from "../features/workspace/model";
+import { searchKnowledge } from "../features/workspace/knowledge-search";
 import { useDemoWorkspace } from "../features/workspace/use-demo-workspace";
 
 type View = WorkspaceArea;
@@ -96,6 +110,46 @@ const applicationSteps = [
   "Gennemse",
 ];
 
+const ONBOARDING_STORAGE_KEY = "dgita-onboarding-v1-complete";
+
+const onboardingSteps: readonly SpotlightTourStep[] = [
+  {
+    selector: "[data-tour='home']",
+    title: "Velkommen til D-GITA",
+    body: "Herfra kan du altid vende tilbage til forsiden og få overblik over anskaffelsesforløbet.",
+  },
+  {
+    selector: "[data-tour='primary-navigation']",
+    title: "Dine områder",
+    body: "Navigationen tilpasses din rolle. Som bruger ser du dine egne ansøgninger; konsulenter og administratorer får deres arbejdsområder.",
+  },
+  {
+    selector: "[data-tour='role-switcher']",
+    title: "Afprøv de tre roller",
+    body: "I testmiljøet kan du skifte mellem Bruger, D-GITA-konsulent og Admin. Senere kommer rollen fra kommunal SSO.",
+  },
+  {
+    selector: "[data-tour='primary-action']",
+    title: "Start eller fortsæt arbejdet",
+    body: "Den primære handling fører dig til en ny ansøgning eller den arbejdskø, som hører til din rolle.",
+  },
+  {
+    selector: "[data-tour='knowledge-link']",
+    title: "Vejledning og svar",
+    body: "Her finder du vejledninger, FAQ, databehandlerkrav og nyttige links. Søgningen tåler også almindelige stavefejl.",
+  },
+  {
+    selector: "[data-tour='notifications']",
+    title: "Følg sagen",
+    body: "Notifikationer samler statusændringer, godkendelser og kvitteringer ét sted.",
+  },
+  {
+    selector: "[data-tour='profile']",
+    title: "Du kan altid starte turen igen",
+    body: "Åbn din brugerprofil og vælg Tutorial, når du vil se introduktionen igen.",
+  },
+];
+
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -108,6 +162,10 @@ export default function HomePage() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState(false);
+  const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
   const workspace = useDemoWorkspace();
 
   const viewer = DEMO_VIEWERS[role];
@@ -118,6 +176,20 @@ export default function HomePage() {
   const selectedCase = selectedId
     ? resolveAccessibleCase(viewer, selectedId, DEMO_CASES)
     : null;
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(ONBOARDING_STORAGE_KEY)) return;
+      const timeout = window.setTimeout(() => {
+        setView("home");
+        setTourStep(0);
+        setTourOpen(true);
+      }, 650);
+      return () => window.clearTimeout(timeout);
+    } catch {
+      // Tutorialen kan stadig startes manuelt, hvis lokal lagring er blokeret.
+    }
+  }, []);
 
   function showToast(message: string) {
     setToast(message);
@@ -151,6 +223,10 @@ export default function HomePage() {
       ? resolveAccessibleCase(nextViewer, selectedId, DEMO_CASES)
       : null;
     setRole(nextRole);
+    if (nextRole !== "admin") {
+      setEditorMode(false);
+      setEditorSelection(null);
+    }
     setProfileOpen(false);
     setNotificationsOpen(false);
     setMobileMenu(false);
@@ -159,6 +235,27 @@ export default function HomePage() {
     }
     if (!nextCanOpenSelected) setSelectedId(null);
     showToast(`Testrolle skiftet til ${ROLE_LABELS[nextRole]}.`);
+  }
+
+  function startTutorial() {
+    setView("home");
+    setMobileMenu(false);
+    setProfileOpen(false);
+    setNotificationsOpen(false);
+    setEditorSelection(null);
+    setTourStep(0);
+    setTourOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function completeTutorial() {
+    setTourOpen(false);
+    try {
+      window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
+    } catch {
+      // Tutorialstatus er en bekvemmelighed og må ikke blokere portalen.
+    }
+    showToast("Tutorialen er gennemført. Du kan starte den igen fra din profil.");
   }
 
   return (
@@ -181,11 +278,27 @@ export default function HomePage() {
           setNotificationsOpen(!notificationsOpen);
           setProfileOpen(false);
         }}
+        editorMode={editorMode}
+        onToggleEditor={() => {
+          setEditorSelection(null);
+          setEditorMode((current) => !current);
+          setProfileOpen(false);
+        }}
+        onTutorial={startTutorial}
       />
 
       <main id="main-content">
         {view === "home" ? (
-          <HomeView role={role} content={workspace.content} onNavigate={navigate} onToast={showToast} />
+          <HomeView
+            role={role}
+            content={workspace.content}
+            images={workspace.images}
+            editorMode={editorMode}
+            onEdit={(entry) => setEditorSelection({ kind: "content", entry })}
+            onEditImage={(entry) => setEditorSelection({ kind: "image", entry })}
+            onNavigate={navigate}
+            onToast={showToast}
+          />
         ) : null}
         {view === "cases" ? (
           <CasesView personal={role === "user"} rows={visibleCases} onNew={() => navigate("application")} onOpen={openCase} />
@@ -241,7 +354,15 @@ export default function HomePage() {
         {view === "detail" && !selectedCase ? (
           <AccessDenied onBack={() => navigate(defaultAreaForRole(role))} />
         ) : null}
-        {view === "knowledge" ? <KnowledgeView content={workspace.content} /> : null}
+        {view === "knowledge" ? (
+          <KnowledgeView
+            content={workspace.content}
+            images={workspace.images}
+            editorMode={editorMode}
+            onEdit={(entry) => setEditorSelection({ kind: "content", entry })}
+            onEditImage={(entry) => setEditorSelection({ kind: "image", entry })}
+          />
+        ) : null}
         {view === "admin" ? (
           <AdminView
             content={workspace.content}
@@ -249,7 +370,11 @@ export default function HomePage() {
             onUpdateContent={(entry) => workspace.updateContent(entry, viewer)}
             onAddContent={(entry) => workspace.addContent(entry, viewer)}
             onRemoveContent={(id) => workspace.removeContent(id, viewer)}
-            onResetContent={() => workspace.resetContent(viewer)}
+            onResetContent={() => {
+              const contentReset = workspace.resetContent(viewer);
+              workspace.resetImages(viewer);
+              return contentReset;
+            }}
             onToast={showToast}
           />
         ) : null}
@@ -264,6 +389,53 @@ export default function HomePage() {
           </button>
         </div>
       ) : null}
+
+      {role === "admin" ? (
+        <EditorToolbar
+          active={editorMode}
+          onToggle={() => {
+            setEditorSelection(null);
+            setEditorMode((current) => !current);
+          }}
+          onOpenLibrary={() => navigate("admin")}
+        />
+      ) : null}
+      <EditorDrawer
+        key={editorSelection ? `${editorSelection.kind}:${editorSelection.entry.id}` : "closed"}
+        selection={role === "admin" && editorMode ? editorSelection : null}
+        onClose={() => setEditorSelection(null)}
+        onSaveContent={(entry) => {
+          const saved = workspace.updateContent(entry, viewer);
+          if (saved) showToast(`“${entry.title}” er gemt og publiceret på siden.`);
+          return saved;
+        }}
+        onSaveImage={(entry) => {
+          const saved = workspace.updateImage(entry, viewer);
+          if (saved) showToast("Portalbilledet er erstattet.");
+          return saved;
+        }}
+        onResetImages={() => {
+          if (workspace.resetImages(viewer)) showToast("Standardbillederne er gendannet.");
+          setEditorSelection(null);
+        }}
+        onOpenLibrary={() => {
+          setEditorSelection(null);
+          navigate("admin");
+        }}
+      />
+      <SpotlightTour
+        open={tourOpen}
+        steps={onboardingSteps}
+        activeStep={tourStep}
+        onActiveStepChange={setTourStep}
+        onClose={(reason) => {
+          setTourOpen(false);
+          if (reason === "skip") {
+            try { window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true"); } catch {}
+          }
+        }}
+        onComplete={completeTutorial}
+      />
     </div>
   );
 }
@@ -280,6 +452,9 @@ function Header({
   onMobileMenu,
   onProfile,
   onNotifications,
+  editorMode,
+  onToggleEditor,
+  onTutorial,
 }: {
   view: View;
   role: WorkspaceRole;
@@ -292,6 +467,9 @@ function Header({
   onMobileMenu: () => void;
   onProfile: () => void;
   onNotifications: () => void;
+  editorMode: boolean;
+  onToggleEditor: () => void;
+  onTutorial: () => void;
 }) {
   const allNavigation: Array<{ label: string; view: View }> = [
     { label: "Startside", view: "home" },
@@ -306,7 +484,7 @@ function Header({
     <header className="site-header">
       <a className="skip-link" href="#main-content">Gå til hovedindhold</a>
       <div className="header-inner">
-        <button className="wordmark" type="button" onClick={() => onNavigate("home")}>
+        <button className="wordmark" data-tour="home" type="button" onClick={() => onNavigate("home")}>
           <span className="wordmark-symbol">D</span>
           <span>
             <strong>D-GITA</strong>
@@ -314,7 +492,7 @@ function Header({
           </span>
         </button>
 
-        <nav className={cx("site-nav", mobileMenu && "open")} aria-label="Primær navigation">
+        <nav className={cx("site-nav", mobileMenu && "open")} data-tour="primary-navigation" aria-label="Primær navigation">
           {navigation.map((item) => (
             <button
               className={cx(view === item.view && "active")}
@@ -328,7 +506,7 @@ function Header({
         </nav>
 
         <div className="header-actions">
-          <label className="role-switcher">
+          <label className="role-switcher" data-tour="role-switcher">
             <span>Testrolle</span>
             <select
               aria-label="Skift testrolle"
@@ -342,14 +520,14 @@ function Header({
             <ChevronDown size={14} />
           </label>
           <div className="header-popover-anchor">
-            <button className="header-icon-button" type="button" aria-label="Notifikationer" onClick={onNotifications}>
+            <button className="header-icon-button" data-tour="notifications" type="button" aria-label="Notifikationer" onClick={onNotifications}>
               <Bell size={20} />
               <span>3</span>
             </button>
             {notificationsOpen ? <NotificationPanel /> : null}
           </div>
           <div className="header-popover-anchor profile-anchor">
-            <button className="account-button" type="button" onClick={onProfile}>
+            <button className="account-button" data-tour="profile" type="button" onClick={onProfile}>
               <span className="account-avatar">{viewer.initials}</span>
               <span className="account-copy"><strong>{viewer.displayName}</strong><small>{viewer.municipality}</small></span>
               <ChevronDown size={16} />
@@ -359,6 +537,8 @@ function Header({
                 <div className="profile-menu-head"><span>{viewer.initials}</span><div><strong>{viewer.displayName}</strong><small>{ROLE_LABELS[role]} · testtilstand</small></div></div>
                 <button type="button"><UserRound size={17} /> Min profil</button>
                 {capabilitiesFor(role).createApplications ? <button type="button"><ReceiptText size={17} /> Mine kvitteringer</button> : null}
+                <button type="button" onClick={onTutorial}><BookOpen size={17} /> Tutorial</button>
+                {role === "admin" ? <button type="button" onClick={onToggleEditor}><PencilLine size={17} /> Editor mode: {editorMode ? "aktiv" : "slået fra"}</button> : null}
                 <button type="button"><Settings2 size={17} /> Indstillinger</button>
               </div>
             ) : null}
@@ -390,29 +570,38 @@ function Notice({ icon: Icon, title, meta }: { icon: LucideIcon; title: string; 
 function HomeView({
   role,
   content,
+  images,
+  editorMode,
+  onEdit,
+  onEditImage,
   onNavigate,
   onToast,
 }: {
   role: WorkspaceRole;
   content: ContentEntry[];
+  images: ImageEntry[];
+  editorMode: boolean;
+  onEdit: (entry: ContentEntry) => void;
+  onEditImage: (entry: ImageEntry) => void;
   onNavigate: (view: View) => void;
   onToast: (message: string) => void;
 }) {
   const canCreate = capabilitiesFor(role).createApplications;
+  const localEmail = contentBody(content, "contact.local.email", "ckra@kalundborg.dk");
   return (
     <div className="home-page">
       <section className="editorial-hero">
         <div className="hero-photo">
-          <Image src="/dgita-hero.png" alt="Kommunale medarbejdere samarbejder om en IT-anskaffelse" fill priority unoptimized sizes="(max-width: 900px) 100vw, 56vw" />
+          <ManagedImage images={images} imageId="home.hero.image" fallbackSrc="/dgita-hero.png" fallbackAlt="Kommunale medarbejdere samarbejder om en IT-anskaffelse" editorMode={editorMode} onEdit={onEditImage} priority />
         </div>
         <div className="hero-content">
-          <span className="section-label">Kalundborg Kommune · D-GITA</span>
-          <h1>{contentBody(content, "home.hero.title", "En god IT-anskaffelse starter med det rigtige behov.")}</h1>
-          <p>{contentBody(content, "home.hero.body", "Opret en ansøgning, eller se dine igangværende og historiske ansøgninger.")}</p>
-          <p className="hero-note"><Info size={17} /> Portalen bruges til køb under udbudsgrænsen.</p>
+          <EditableText as="span" className="section-label" content={content} contentId="home.hero.eyebrow" fallback="Kalundborg Kommune · D-GITA" editorMode={editorMode} onEdit={onEdit} />
+          <EditableText as="h1" content={content} contentId="home.hero.title" fallback="En god IT-anskaffelse starter med det rigtige behov." editorMode={editorMode} onEdit={onEdit} />
+          <EditableText as="p" content={content} contentId="home.hero.body" fallback="Opret en ansøgning, eller se dine igangværende og historiske ansøgninger." editorMode={editorMode} onEdit={onEdit} />
+          <p className="hero-note"><Info size={17} /> <EditableText as="span" content={content} contentId="home.hero.note" fallback="Portalen bruges til køb under udbudsgrænsen." editorMode={editorMode} onEdit={onEdit} /></p>
           <div className="hero-actions">
-            {canCreate ? <button className="solid-button" type="button" onClick={() => onNavigate("application")}>Opret ansøgning <ArrowRight size={18} /></button> : null}
-            <button className={canCreate ? "line-button light" : "solid-button"} type="button" onClick={() => onNavigate(role === "user" ? "cases" : "consultant")}>
+            {canCreate ? <button className="solid-button" data-tour="primary-action" type="button" onClick={() => onNavigate("application")}>Opret ansøgning <ArrowRight size={18} /></button> : null}
+            <button className={canCreate ? "line-button light" : "solid-button"} data-tour={canCreate ? undefined : "primary-action"} type="button" onClick={() => onNavigate(role === "user" ? "cases" : "consultant")}>
               {role === "user" ? "Se mine ansøgninger" : "Åbn D-GITA-arbejdskøen"}
             </button>
           </div>
@@ -421,43 +610,43 @@ function HomeView({
 
       <section className="home-intro page-width">
         <div className="intro-heading">
-          <span className="section-label dark">Fra idé til sikker anskaffelse</span>
-          <h2>Portalen samler hele forløbet.</h2>
+          <EditableText as="span" className="section-label dark" content={content} contentId="home.intro.eyebrow" fallback="Fra idé til sikker anskaffelse" editorMode={editorMode} onEdit={onEdit} />
+          <EditableText as="h2" content={content} contentId="home.intro.title" fallback="Portalen samler hele forløbet." editorMode={editorMode} onEdit={onEdit} />
         </div>
-        <p>Du beskriver behovet én gang. Derefter hjælper D-GITA-konsulenten med marked, arkitektur, sikkerhed, økonomi, dokumentation og ledergodkendelse.</p>
+        <EditableText as="p" content={content} contentId="home.intro.body" fallback="Du beskriver behovet én gang. Derefter hjælper D-GITA-konsulenten med marked, arkitektur, sikkerhed, økonomi, dokumentation og ledergodkendelse." editorMode={editorMode} onEdit={onEdit} />
       </section>
 
       <section className="process-section page-width" aria-label="D-GITA-processen">
-        <ProcessStep number="01" title="Beskriv behovet" text="Svar på de relevante spørgsmål om systemet, arbejdsprocesserne og værdien for kommunen." />
-        <ProcessStep number="02" title="Få faglig sparring" text="Din lokale D-GITA-konsulent gennemgår anskaffelsesform, risiko, data og IT-krav." />
-        <ProcessStep number="03" title="Indhent godkendelse" text="Lederen modtager et samlet, versionslåst beslutningsgrundlag og godkender digitalt." />
-        <ProcessStep number="04" title="Gem dokumentationen" text="Kvitteringer, bilag, kommentarer og statusændringer bliver samlet på sagen." />
+        <ProcessStep number="01" content={content} titleId="home.process.describe.title" bodyId="home.process.describe.body" title="Beskriv behovet" text="Svar på de relevante spørgsmål om systemet, arbejdsprocesserne og værdien for kommunen." editorMode={editorMode} onEdit={onEdit} />
+        <ProcessStep number="02" content={content} titleId="home.process.advise.title" bodyId="home.process.advise.body" title="Få faglig sparring" text="Din lokale D-GITA-konsulent gennemgår anskaffelsesform, risiko, data og IT-krav." editorMode={editorMode} onEdit={onEdit} />
+        <ProcessStep number="03" content={content} titleId="home.process.approve.title" bodyId="home.process.approve.body" title="Indhent godkendelse" text="Lederen modtager et samlet, versionslåst beslutningsgrundlag og godkender digitalt." editorMode={editorMode} onEdit={onEdit} />
+        <ProcessStep number="04" content={content} titleId="home.process.document.title" bodyId="home.process.document.body" title="Gem dokumentationen" text="Kvitteringer, bilag, kommentarer og statusændringer bliver samlet på sagen." editorMode={editorMode} onEdit={onEdit} />
       </section>
 
       <section className="help-editorial page-width">
         <div className="help-photo">
-          <Image src="/dgita-help.png" alt="En D-GITA-konsulent hjælper en kollega" fill unoptimized sizes="(max-width: 800px) 100vw, 48vw" />
+          <ManagedImage images={images} imageId="home.help.image" fallbackSrc="/dgita-help.png" fallbackAlt="En D-GITA-konsulent hjælper en kollega" editorMode={editorMode} onEdit={onEditImage} />
         </div>
         <div className="help-copy">
-          <span className="section-label dark">Har du brug for hjælp?</span>
-          <h2>Få afklaring, før du udfylder ansøgningen.</h2>
-          <p>{contentBody(content, "home.help.body", "Er du i tvivl om din IT-anskaffelse, hjælper din lokale konsulent dig i gang.")}</p>
+          <EditableText as="span" className="section-label dark" content={content} contentId="home.help.eyebrow" fallback="Har du brug for hjælp?" editorMode={editorMode} onEdit={onEdit} />
+          <EditableText as="h2" content={content} contentId="home.help.title" fallback="Få afklaring, før du udfylder ansøgningen." editorMode={editorMode} onEdit={onEdit} />
+          <EditableText as="p" content={content} contentId="home.help.body" fallback="Er du i tvivl om din IT-anskaffelse, hjælper din lokale konsulent dig i gang." editorMode={editorMode} onEdit={onEdit} />
           <div className="contact-person">
             <span>CK</span>
-            <div><small>Din lokale D-GITA-konsulent</small><strong>Casper Kjeldsen Ravn</strong><a href="mailto:ckra@kalundborg.dk">ckra@kalundborg.dk</a></div>
+            <div><EditableText as="small" content={content} contentId="contact.local.role" fallback="Din lokale D-GITA-konsulent" editorMode={editorMode} onEdit={onEdit} /><EditableText as="strong" content={content} contentId="contact.local.name" fallback="Casper Kjeldsen Ravn" editorMode={editorMode} onEdit={onEdit} /><a href={`mailto:${localEmail}`}><EditableText as="span" content={content} contentId="contact.local.email" fallback="ckra@kalundborg.dk" editorMode={editorMode} onEdit={onEdit} insideInteractive /></a></div>
           </div>
           <button className="solid-button dark" type="button" onClick={() => onToast("Anmodning om formøde er oprettet")}>Book et formøde <ArrowRight size={18} /></button>
         </div>
       </section>
 
       <section className="resources-section page-width">
-        <div className="resources-heading"><span className="section-label dark">Viden og vejledning</span><h2>Genveje til et bedre forløb</h2></div>
-        <div className="resource-list">
-          <ResourceLink title="Om D-GITA" text="Læs om portalen og processen." onClick={() => onNavigate("knowledge")} />
-          <ResourceLink title="Vejledning / FAQ" text="Begreber, funktioner og svar undervejs." onClick={() => onNavigate("knowledge")} />
-          <ResourceLink title="Nyttige links" text="KITOS, databehandleraftaler og lokale skabeloner." onClick={() => onNavigate("knowledge")} />
-          <ResourceLink title="Info fra din kommune" text="Særlige krav og information fra Kalundborg." onClick={() => onNavigate("knowledge")} />
-          <ResourceLink title="Ny funktionalitet" text="Se de seneste ændringer i portalen." onClick={() => onNavigate("knowledge")} />
+        <div className="resources-heading"><EditableText as="span" className="section-label dark" content={content} contentId="home.resources.eyebrow" fallback="Viden og vejledning" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="home.resources.title" fallback="Genveje til et bedre forløb" editorMode={editorMode} onEdit={onEdit} /></div>
+        <div className="resource-list" data-tour="knowledge-link">
+          <ResourceLink content={content} titleId="home.resources.about.title" bodyId="home.resources.about.body" title="Om D-GITA" text="Læs om portalen og processen." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
+          <ResourceLink content={content} titleId="home.resources.guide.title" bodyId="home.resources.guide.body" title="Vejledning / FAQ" text="Begreber, funktioner og svar undervejs." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
+          <ResourceLink content={content} titleId="home.resources.links.title" bodyId="home.resources.links.body" title="Nyttige links" text="KITOS, databehandleraftaler og lokale skabeloner." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
+          <ResourceLink content={content} titleId="home.resources.municipality.title" bodyId="home.resources.municipality.body" title="Info fra din kommune" text="Særlige krav og information fra Kalundborg." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
+          <ResourceLink content={content} titleId="home.resources.changelog.title" bodyId="home.resources.changelog.body" title="Ny funktionalitet" text="Se de seneste ændringer i portalen." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
         </div>
         <div className="operation-strip"><span className="operation-dot" /><strong>Normal drift</strong><span>Alle centrale tjenester fungerer</span><button type="button">Se driftstatus <ExternalLink size={15} /></button></div>
       </section>
@@ -465,12 +654,12 @@ function HomeView({
   );
 }
 
-function ProcessStep({ number, title, text }: { number: string; title: string; text: string }) {
-  return <article className="process-step"><span>{number}</span><h3>{title}</h3><p>{text}</p></article>;
+function ProcessStep({ number, content, titleId, bodyId, title, text, editorMode, onEdit }: { number: string; content: ContentEntry[]; titleId: string; bodyId: string; title: string; text: string; editorMode: boolean; onEdit: (entry: ContentEntry) => void }) {
+  return <article className="process-step"><span>{number}</span><EditableText as="h3" content={content} contentId={titleId} fallback={title} editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId={bodyId} fallback={text} editorMode={editorMode} onEdit={onEdit} /></article>;
 }
 
-function ResourceLink({ title, text, onClick }: { title: string; text: string; onClick: () => void }) {
-  return <button className="resource-link" type="button" onClick={onClick}><span><strong>{title}</strong><small>{text}</small></span><ArrowRight size={19} /></button>;
+function ResourceLink({ content, titleId, bodyId, title, text, editorMode, onEdit, onClick }: { content: ContentEntry[]; titleId: string; bodyId: string; title: string; text: string; editorMode: boolean; onEdit: (entry: ContentEntry) => void; onClick: () => void }) {
+  return <button className="resource-link" type="button" onClick={onClick}><span><EditableText as="strong" content={content} contentId={titleId} fallback={title} editorMode={editorMode} onEdit={onEdit} insideInteractive /><EditableText as="small" content={content} contentId={bodyId} fallback={text} editorMode={editorMode} onEdit={onEdit} insideInteractive /></span><ArrowRight size={19} /></button>;
 }
 
 function CasesView({ personal, rows: availableRows, onNew, onOpen }: { personal: boolean; rows: CaseRecord[]; onNew: () => void; onOpen: (id: string) => void }) {
@@ -590,37 +779,55 @@ function AccessDenied({ onBack }: { onBack: () => void }) {
   return <div className="portal-page page-width"><section className="plain-section access-denied"><LockKeyhole size={28} /><span className="section-label dark">Adgang afvist</span><h1>Du kan ikke åbne denne ansøgning</h1><p>Sagen findes ikke, eller den tilhører en anden bruger. Almindelige brugere kan kun se deres egne ansøgninger.</p><button className="solid-button" type="button" onClick={onBack}><ArrowLeft size={17} /> Tilbage til dit område</button></section></div>;
 }
 
-function KnowledgeView({ content }: { content: ContentEntry[] }) {
+function KnowledgeView({
+  content,
+  images,
+  editorMode,
+  onEdit,
+  onEditImage,
+}: {
+  content: ContentEntry[];
+  images: ImageEntry[];
+  editorMode: boolean;
+  onEdit: (entry: ContentEntry) => void;
+  onEditImage: (entry: ImageEntry) => void;
+}) {
   const [query, setQuery] = useState("");
-  const published = content.filter((entry) => entry.published);
-  const normalizedQuery = query.trim().toLocaleLowerCase("da-DK");
-  const matches = (entry: ContentEntry) => !normalizedQuery || `${entry.title} ${entry.body}`.toLocaleLowerCase("da-DK").includes(normalizedQuery);
-  const guidance = published.filter((entry) => entry.category === "form_help" && matches(entry));
-  const faqs = published.filter((entry) => entry.category === "faq" && matches(entry));
+  const published = useMemo(() => content.filter((entry) => entry.published), [content]);
+  const searchResults = useMemo(
+    () => searchKnowledge(
+      published.filter((entry) => entry.category === "form_help" || entry.category === "faq"),
+      query,
+    ),
+    [published, query],
+  );
+  const guidance = searchResults.filter((result) => result.item.category === "form_help").map((result) => result.item);
+  const faqs = searchResults.filter((result) => result.item.category === "faq").map((result) => result.item);
   const links = published.filter((entry) => entry.category === "link");
   const processor = published.filter((entry) => entry.category === "data_processor");
   const hasSearchResults = guidance.length > 0 || faqs.length > 0;
+  const fuzzyMatch = query.trim() && searchResults.some((result) => result.matchKind === "fuzzy");
 
   return <div className="knowledge-page">
     <section className="knowledge-editorial-hero">
-      <div className="knowledge-hero-photo"><Image src="/dgita-help.png" alt="En D-GITA-konsulent vejleder en kommunal kollega" fill priority unoptimized sizes="(max-width: 900px) 100vw, 48vw" /></div>
-      <div className="knowledge-hero-copy"><span className="section-label">Viden · Kalundborg Kommune</span><h1>{contentBody(content, "knowledge.hero.title", "Vejledning til Den Gode IT-Anskaffelse")}</h1><p>{contentBody(content, "knowledge.hero.body", "En samlet gennemgang af IT-ansøgningsprocessen og D-GITA-konsulenternes rolle.")}</p><div className="knowledge-hero-stats"><div><strong>{published.filter((entry) => entry.category === "form_help").length}</strong><small>vejledninger</small></div><div><strong>{published.filter((entry) => entry.category === "faq").length}</strong><small>FAQ-svar</small></div><div><strong>{links.length}</strong><small>nyttige links</small></div></div></div>
+      <div className="knowledge-hero-photo"><ManagedImage images={images} imageId="knowledge.hero.image" fallbackSrc="/dgita-help.png" fallbackAlt="En D-GITA-konsulent vejleder en kommunal kollega" editorMode={editorMode} onEdit={onEditImage} priority /></div>
+      <div className="knowledge-hero-copy"><EditableText as="span" className="section-label" content={content} contentId="knowledge.hero.eyebrow" fallback="Viden · Kalundborg Kommune" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h1" content={content} contentId="knowledge.hero.title" fallback="Vejledning til Den Gode IT-Anskaffelse" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.hero.body" fallback="En samlet gennemgang af IT-ansøgningsprocessen og D-GITA-konsulenternes rolle." editorMode={editorMode} onEdit={onEdit} /><div className="knowledge-hero-stats"><div><strong>{published.filter((entry) => entry.category === "form_help").length}</strong><small>vejledninger</small></div><div><strong>{published.filter((entry) => entry.category === "faq").length}</strong><small>FAQ-svar</small></div><div><strong>{links.length}</strong><small>nyttige links</small></div></div></div>
     </section>
 
     <div className="page-width knowledge-content">
-      <section className="knowledge-intro"><div><span className="section-label dark">Information</span><h2>Kom godt fra behov til færdig sag.</h2><p>{contentBody(content, "knowledge.info", "Vejledningen tager dig gennem alle faser af en IT-anskaffelse.")}</p></div><aside><Info size={21} /><div><strong>Vigtigt tip</strong><p>{contentBody(content, "knowledge.tip", "Involvér D-GITA-konsulenten tidligt i processen.")}</p></div></aside></section>
+      <section className="knowledge-intro"><div><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.intro.eyebrow" fallback="Information" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.intro.title" fallback="Kom godt fra behov til færdig sag." editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.info" fallback="Vejledningen tager dig gennem alle faser af en IT-anskaffelse." editorMode={editorMode} onEdit={onEdit} /></div><aside><Info size={21} /><div><EditableText as="strong" content={content} contentId="knowledge.tip.title" fallback="Vigtigt tip" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.tip" fallback="Involvér D-GITA-konsulenten tidligt i processen." editorMode={editorMode} onEdit={onEdit} /></div></aside></section>
 
-      <section className="knowledge-process" aria-label="D-GITA-forløbet"><div className="knowledge-section-heading"><span className="section-label dark">Det visuelle forløb</span><h2>Tre roller. Ét fælles beslutningsgrundlag.</h2></div><div className="knowledge-process-steps"><article><span>01</span><small>Anmoder</small><h3>Opret ansøgningen</h3><p>{contentBody(content, "knowledge.process.applicant", "Beskriv behovet og saml dokumentationen.")}</p></article><article><span>02</span><small>Leder</small><h3>Godkend grundlaget</h3><p>{contentBody(content, "knowledge.process.leader", "Lederen godkender eller afviser den indsendte version.")}</p></article><article><span>03</span><small>D-GITA</small><h3>Vurdér og færdigbehandl</h3><p>{contentBody(content, "knowledge.process.consultant", "D-GITA vurderer og færdigbehandler sagen i dialog med anmoderen.")}</p></article></div></section>
+      <section className="knowledge-process" aria-label="D-GITA-forløbet"><div className="knowledge-section-heading"><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.process.eyebrow" fallback="Det visuelle forløb" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.process.title" fallback="Tre roller. Ét fælles beslutningsgrundlag." editorMode={editorMode} onEdit={onEdit} /></div><div className="knowledge-process-steps"><article><span>01</span><EditableText as="small" content={content} contentId="knowledge.process.applicant.role" fallback="Anmoder" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h3" content={content} contentId="knowledge.process.applicant.title" fallback="Opret ansøgningen" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.process.applicant" fallback="Beskriv behovet og saml dokumentationen." editorMode={editorMode} onEdit={onEdit} /></article><article><span>02</span><EditableText as="small" content={content} contentId="knowledge.process.leader.role" fallback="Leder" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h3" content={content} contentId="knowledge.process.leader.title" fallback="Godkend grundlaget" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.process.leader" fallback="Lederen godkender eller afviser den indsendte version." editorMode={editorMode} onEdit={onEdit} /></article><article><span>03</span><EditableText as="small" content={content} contentId="knowledge.process.consultant.role" fallback="D-GITA" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h3" content={content} contentId="knowledge.process.consultant.title" fallback="Vurdér og færdigbehandl" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.process.consultant" fallback="D-GITA vurderer og færdigbehandler sagen i dialog med anmoderen." editorMode={editorMode} onEdit={onEdit} /></article></div></section>
 
-      <section className="knowledge-about-grid"><article><BookOpen size={22} /><span className="section-label dark">Om portalen</span><h2>Den Gode IT-Anskaffelse</h2><p>{contentBody(content, "knowledge.about", "D-GITA samler de oplysninger, der skal bruges til en god IT-anskaffelse.")}</p></article><article><UserCheck size={22} /><span className="section-label dark">Rådgivning</span><h2>D-GITA-konsulenten</h2><p>{contentBody(content, "knowledge.consultant", "Konsulenten hjælper med krav, dokumentation og kommunens IT-infrastruktur.")}</p></article></section>
+      <section className="knowledge-about-grid"><article><BookOpen size={22} /><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.about.eyebrow" fallback="Om portalen" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.about.title" fallback="Den Gode IT-Anskaffelse" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.about" fallback="D-GITA samler de oplysninger, der skal bruges til en god IT-anskaffelse." editorMode={editorMode} onEdit={onEdit} /></article><article><UserCheck size={22} /><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.consultant.eyebrow" fallback="Rådgivning" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.consultant.title" fallback="D-GITA-konsulenten" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.consultant" fallback="Konsulenten hjælper med krav, dokumentation og kommunens IT-infrastruktur." editorMode={editorMode} onEdit={onEdit} /></article></section>
 
-      <section className="knowledge-library"><div className="knowledge-library-head"><div><span className="section-label dark">Ordbog og svar</span><h2>Find det, du har brug for</h2><p>Søg på fx kontrakt, ESDH, risikovurdering, leder eller databehandleraftale.</p></div><label className="knowledge-search"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Søg i vejledninger og FAQ" aria-label="Søg i vejledninger og FAQ" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Ryd søgning"><X size={16} /></button> : null}</label></div>
-        {hasSearchResults ? <div className="knowledge-answer-grid"><section className="knowledge-accordion"><div className="knowledge-list-title"><BookOpen size={18} /><div><h3>Vejledninger</h3><small>{guidance.length} emner</small></div></div>{guidance.map((entry, index) => <details className="guide-item" key={entry.id}><summary><span>{String(index + 1).padStart(2, "0")}</span>{entry.title}<ChevronDown size={17} /></summary><div><p>{entry.body}</p><small>{entry.location}</small></div></details>)}</section><section className="knowledge-accordion"><div className="knowledge-list-title"><MessageSquare size={18} /><div><h3>Ofte stillede spørgsmål</h3><small>{faqs.length} svar</small></div></div>{faqs.map((entry) => <details className="guide-item faq-guide-item" key={entry.id}><summary><span>?</span>{entry.title}<ChevronDown size={17} /></summary><div><p>{entry.body}</p></div></details>)}</section></div> : <div className="knowledge-empty"><Search size={26} /><h3>Ingen svar matcher “{query}”</h3><p>Prøv et kortere søgeord, eller ryd søgningen for at se alle emner.</p><button className="line-button" type="button" onClick={() => setQuery("")}>Vis alle emner</button></div>}
+      <section className="knowledge-library"><div className="knowledge-library-head"><div><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.library.eyebrow" fallback="Ordbog og svar" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.library.title" fallback="Find det, du har brug for" editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.library.body" fallback="Søg på fx kontrakt, ESDH, risikovurdering, leder eller databehandleraftale." editorMode={editorMode} onEdit={onEdit} /></div><div className="knowledge-search-wrap"><label className="knowledge-search"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Søg i vejledninger og FAQ" aria-label="Søg i vejledninger og FAQ" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Ryd søgning"><X size={16} /></button> : null}</label><small className={fuzzyMatch ? "fuzzy-search-note matched" : "fuzzy-search-note"}>{fuzzyMatch ? "Vi fandt relevante svar trods en mulig stavefejl." : "Søgningen tåler almindelige stavefejl."}</small></div></div>
+        {hasSearchResults ? <div className="knowledge-answer-grid"><section className="knowledge-accordion"><div className="knowledge-list-title"><BookOpen size={18} /><div><h3>Vejledninger</h3><small>{guidance.length} emner</small></div></div>{guidance.map((entry, index) => <div className="cms-item-shell" key={entry.id}><CollectionEditButton entry={entry} editorMode={editorMode} onEdit={onEdit} /><details className="guide-item"><summary><span>{String(index + 1).padStart(2, "0")}</span>{entry.title}<ChevronDown size={17} /></summary><div><p>{entry.body}</p><small>{entry.location}</small></div></details></div>)}</section><section className="knowledge-accordion"><div className="knowledge-list-title"><MessageSquare size={18} /><div><h3>Ofte stillede spørgsmål</h3><small>{faqs.length} svar</small></div></div>{faqs.map((entry) => <div className="cms-item-shell" key={entry.id}><CollectionEditButton entry={entry} editorMode={editorMode} onEdit={onEdit} /><details className="guide-item faq-guide-item"><summary><span>?</span>{entry.title}<ChevronDown size={17} /></summary><div><p>{entry.body}</p></div></details></div>)}</section></div> : <div className="knowledge-empty"><Search size={26} /><h3>Ingen svar matcher “{query}”</h3><p>Prøv et kortere søgeord, eller ryd søgningen for at se alle emner.</p><button className="line-button" type="button" onClick={() => setQuery("")}>Vis alle emner</button></div>}
       </section>
 
-      <div className="knowledge-grid knowledge-bottom-grid"><section className="plain-section knowledge-section"><div className="plain-heading"><span className="section-label dark">Krav og dokumentation</span><h2>Databehandlerkrav</h2></div>{processor.map((entry) => <article className="knowledge-card" key={entry.id}><ShieldCheck size={19} /><div><h3>{entry.title}</h3><p>{entry.body}</p></div></article>)}</section><section className="plain-section knowledge-section"><div className="plain-heading"><span className="section-label dark">Generelle og lokale genveje</span><h2>Nyttige links</h2></div><div className="knowledge-links">{links.map((entry) => entry.url && isSafeContentUrl(entry.url) ? <a href={entry.url} key={entry.id} target={entry.url.startsWith("https://") ? "_blank" : undefined} rel={entry.url.startsWith("https://") ? "noreferrer" : undefined}><Link2 size={18} /><span><strong>{entry.title}</strong><small>{entry.body}</small></span><ExternalLink size={16} /></a> : null)}</div></section></div>
+      <div className="knowledge-grid knowledge-bottom-grid"><section className="plain-section knowledge-section"><div className="plain-heading"><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.processor.eyebrow" fallback="Krav og dokumentation" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.processor.title" fallback="Databehandlerkrav" editorMode={editorMode} onEdit={onEdit} /></div>{processor.map((entry) => <div className="cms-item-shell" key={entry.id}><CollectionEditButton entry={entry} editorMode={editorMode} onEdit={onEdit} /><article className="knowledge-card"><ShieldCheck size={19} /><div><h3>{entry.title}</h3><p>{entry.body}</p></div></article></div>)}</section><section className="plain-section knowledge-section"><div className="plain-heading"><EditableText as="span" className="section-label dark" content={content} contentId="knowledge.links.eyebrow" fallback="Generelle og lokale genveje" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.links.title" fallback="Nyttige links" editorMode={editorMode} onEdit={onEdit} /></div><div className="knowledge-links">{links.map((entry) => entry.url && isSafeContentUrl(entry.url) ? <div className="cms-item-shell" key={entry.id}><CollectionEditButton entry={entry} editorMode={editorMode} onEdit={onEdit} /><a href={entry.url} target={entry.url.startsWith("https://") ? "_blank" : undefined} rel={entry.url.startsWith("https://") ? "noreferrer" : undefined}><Link2 size={18} /><span><strong>{entry.title}</strong><small>{entry.body}</small></span><ExternalLink size={16} /></a></div> : null)}</div></section></div>
 
-      <section className="knowledge-contact"><div><span className="section-label">Stadig i tvivl?</span><h2>Tag D-GITA med fra begyndelsen.</h2><p>Fortæl kort, hvad du har brug for hjælp til — fx at finde et system, skaffe kontrakt eller dokumentation eller komme i gang med din første ansøgning.</p></div><a className="solid-button" href="mailto:ckra@kalundborg.dk?subject=Ønske%20om%20D-GITA-formøde">Book et formøde <ArrowRight size={18} /></a></section>
+      <section className="knowledge-contact"><div><EditableText as="span" className="section-label" content={content} contentId="knowledge.contact.eyebrow" fallback="Stadig i tvivl?" editorMode={editorMode} onEdit={onEdit} /><EditableText as="h2" content={content} contentId="knowledge.contact.title" fallback="Tag D-GITA med fra begyndelsen." editorMode={editorMode} onEdit={onEdit} /><EditableText as="p" content={content} contentId="knowledge.contact.body" fallback="Fortæl kort, hvad du har brug for hjælp til — fx at finde et system, skaffe kontrakt eller dokumentation eller komme i gang med din første ansøgning." editorMode={editorMode} onEdit={onEdit} /></div><a className="solid-button" href="mailto:ckra@kalundborg.dk?subject=Ønske%20om%20D-GITA-formøde">Book et formøde <ArrowRight size={18} /></a></section>
     </div>
   </div>;
 }

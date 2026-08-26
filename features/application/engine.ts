@@ -1,0 +1,705 @@
+export type YesNo = "ja" | "nej";
+
+export type UploadKind =
+  | "risk-assessment"
+  | "data-processing-agreement"
+  | "contract"
+  | "supplier-checklist"
+  | "architecture";
+
+export type AttachmentDraft = {
+  id: string;
+  kind: UploadKind;
+  name: string;
+  size: number;
+  type: string;
+  status: "selected" | "uploading" | "uploaded" | "failed";
+  error?: string;
+};
+
+export type SelectedCatalogSystem = {
+  id: string;
+  name: string;
+  supplier: string;
+  rightsHolder: string;
+  source: "kitos" | "kalundborg" | "both";
+  usedInKalundborg: boolean;
+  localSystemId?: string;
+  localStatus?: string;
+  kitosStatus?: string;
+};
+
+export type ApplicationFormState = {
+  schemaVersion: "dgita-v1";
+  knownSystem: YesNo;
+  replacesExisting: YesNo;
+  replacementSystem: string;
+  catalogQuery: string;
+  selectedSystem: SelectedCatalogSystem | null;
+  manualCatalogEntry: boolean;
+  existsInKitos: YesNo;
+  municipalityAlreadyUsesSystem: YesNo;
+  manualSystemName: string;
+  businessType: string;
+  systemDescription: string;
+  descriptionUrl: string;
+  supplier: string;
+  supplierCvr: string;
+  rightsHolder: string;
+  rightsHolderCvr: string;
+  contactPerson: string;
+  department: string;
+  dataOwner: string;
+  systemOwner: string;
+  contractOwner: string;
+  systemAdministrators: string;
+  superUsers: string;
+  esdhContractUrl: string;
+  esdhDpaUrl: string;
+  responsibleOrganization: string;
+  acquisitionMethod: string;
+  marketResearch: YesNo;
+  marketResearchSystems: string;
+  acquisitionType: "nyanskaffelse" | "tilkøb";
+  relatedSystem: string;
+  purpose: string;
+  functionDescription: string;
+  kleTopics: string[];
+  existingProcessSystem: YesNo;
+  existingProcessSystems: string;
+  crossCutting: YesNo;
+  crossFunctionality: string;
+  crossDepartments: string[];
+  hasBudget: YesNo;
+  budgetAmount: string;
+  oneTimeCost: string;
+  yearlyCost: string;
+  otherCost: string;
+  benefits: string;
+  hasRiskAssessment: YesNo;
+  needsRiskHelp: YesNo;
+  personalData: YesNo;
+  hasDpa: YesNo;
+  hasContract: YesNo;
+  hasSupplierChecklist: YesNo;
+  dataClassification: string;
+  employeeAccess: string;
+  milestones: string[];
+  implementationResources: string;
+  startDate: string;
+  endDate: string;
+  implementationUsers: string;
+  hasArchitecture: YesNo;
+  checklistJournalized: YesNo;
+  approvingLeader: string;
+  remarks: string;
+  consent: boolean;
+  attachments: Record<UploadKind, AttachmentDraft[]>;
+};
+
+export type FormRule = {
+  id: string;
+  sourceField: keyof ApplicationFormState;
+  equals: string;
+  affectedFields: string[];
+  required: boolean;
+  sourceReference: string;
+};
+
+export type FieldError = {
+  field: string;
+  message: string;
+  severity: "error" | "warning";
+};
+
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+export const FORM_RULES: FormRule[] = [
+  {
+    id: "replacement-system",
+    sourceField: "replacesExisting",
+    equals: "ja",
+    affectedFields: ["replacementSystem"],
+    required: true,
+    sourceReference: "Power Pages: fm_systemerstatning → fm_erstatsningssystem",
+  },
+  {
+    id: "known-system",
+    sourceField: "knownSystem",
+    equals: "ja",
+    affectedFields: ["catalogQuery", "selectedSystem"],
+    required: true,
+    sourceReference: "Power Pages: fm_forudbestemtsystemvalg → fm_nytsystemnavn",
+  },
+  {
+    id: "market-research",
+    sourceField: "marketResearch",
+    equals: "ja",
+    affectedFields: ["marketResearchSystems"],
+    required: true,
+    sourceReference: "Power Pages: fm_markedsafdaekning → fm_leverandorafdaekning",
+  },
+  {
+    id: "related-system",
+    sourceField: "acquisitionType",
+    equals: "tilkøb",
+    affectedFields: ["relatedSystem"],
+    required: true,
+    sourceReference: "Power Pages: fm_nyanskaffelsetilkob → fm_tilknyttetsystemnavn",
+  },
+  {
+    id: "existing-process-system",
+    sourceField: "existingProcessSystem",
+    equals: "ja",
+    affectedFields: ["existingProcessSystems"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_eksisterendearbejdsprocessystem → fm_aktuelleundersttotendesystemer",
+  },
+  {
+    id: "cross-cutting",
+    sourceField: "crossCutting",
+    equals: "ja",
+    affectedFields: ["crossFunctionality", "crossDepartments"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_istvaergaaendefunktionalitet → fm_tvaergaaendefunktionalitet/fm_tvaergaaendeenheder",
+  },
+  {
+    id: "responsible-organization",
+    sourceField: "municipalityAlreadyUsesSystem",
+    equals: "nej",
+    affectedFields: ["responsibleOrganization"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_benytteseksisterendesystem=false → fm_ansvarligorganisation",
+  },
+  {
+    id: "existing-budget",
+    sourceField: "hasBudget",
+    equals: "ja",
+    affectedFields: ["budgetAmount"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_eksisterendebudgettilraadighed → fm_eksisterendebudgetbelob",
+  },
+  {
+    id: "risk-upload",
+    sourceField: "hasRiskAssessment",
+    equals: "ja",
+    affectedFields: ["risk-assessment"],
+    required: false,
+    sourceReference: "Power Pages: fm_eksisterenderisikovurdering → Subgrid_Risiko",
+  },
+  {
+    id: "dpa-upload",
+    sourceField: "hasDpa",
+    equals: "ja",
+    affectedFields: ["data-processing-agreement"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_eksisterendedatabehandleraftale → fm_databehandleraftale",
+  },
+  {
+    id: "contract-upload",
+    sourceField: "hasContract",
+    equals: "ja",
+    affectedFields: ["contract"],
+    required: true,
+    sourceReference: "Power Pages: fm_eksisterendekontrakt → fm_kontrakt/Subgrid_Kontrakt",
+  },
+  {
+    id: "checklist-upload",
+    sourceField: "hasSupplierChecklist",
+    equals: "ja",
+    affectedFields: ["supplier-checklist"],
+    required: false,
+    sourceReference: "Power Pages: fm_tjeklistenleverandor → Subgrid_Tjekliste",
+  },
+  {
+    id: "architecture-upload",
+    sourceField: "hasArchitecture",
+    equals: "ja",
+    affectedFields: ["architecture"],
+    required: true,
+    sourceReference:
+      "Power Pages: fm_indhentetsystemarkitektur → fm_tegning/Subgrid_Tegning",
+  },
+];
+
+export const initialApplicationState: ApplicationFormState = {
+  schemaVersion: "dgita-v1",
+  knownSystem: "ja",
+  replacesExisting: "nej",
+  replacementSystem: "",
+  catalogQuery: "WSUS klient",
+  selectedSystem: null,
+  manualCatalogEntry: false,
+  existsInKitos: "ja",
+  municipalityAlreadyUsesSystem: "nej",
+  manualSystemName: "",
+  businessType: "",
+  systemDescription: "",
+  descriptionUrl: "",
+  supplier: "",
+  supplierCvr: "",
+  rightsHolder: "",
+  rightsHolderCvr: "",
+  contactPerson: "atlu@kalundborg.dk",
+  department: "ORG – Digitalisering og IT",
+  dataOwner: "peah@kalundborg.dk",
+  systemOwner: "peah@kalundborg.dk",
+  contractOwner: "atlu@kalundborg.dk",
+  systemAdministrators: "",
+  superUsers: "",
+  esdhContractUrl: "",
+  esdhDpaUrl: "",
+  responsibleOrganization: "ORG – Digitalisering og IT",
+  acquisitionMethod: "DIGIT udbud/aftale",
+  marketResearch: "ja",
+  marketResearchSystems: "System A, System B",
+  acquisitionType: "nyanskaffelse",
+  relatedSystem: "",
+  purpose:
+    "Anskaffelsen skal sikre en stabil og ensartet håndtering af klientopdateringer på tværs af kommunen.",
+  functionDescription:
+    "Systemet understøtter central distribution, planlægning og dokumentation af opdateringer.",
+  kleTopics: ["Digital drift", "Systemadministration"],
+  existingProcessSystem: "ja",
+  existingProcessSystems: "Kommunens nuværende løsning",
+  crossCutting: "ja",
+  crossFunctionality:
+    "Funktionaliteten kan understøtte ensartet klientdrift på tværs af organisationen.",
+  crossDepartments: ["ORG – HR og Udvikling"],
+  hasBudget: "ja",
+  budgetAmount: "2,00",
+  oneTimeCost: "100,00",
+  yearlyCost: "100,00",
+  otherCost: "100,00",
+  benefits: "Mere ensartet drift, færre manuelle opgaver og bedre dokumentation.",
+  hasRiskAssessment: "nej",
+  needsRiskHelp: "ja",
+  personalData: "ja",
+  hasDpa: "nej",
+  hasContract: "nej",
+  hasSupplierChecklist: "nej",
+  dataClassification: "3. Fortrolige oplysninger",
+  employeeAccess: "0-9",
+  milestones: ["Kontraktindgåelse", "Test"],
+  implementationResources:
+    "Projektledelse, teknisk opsætning, test, brugerstyring og uddannelse.",
+  startDate: "2026-09-18",
+  endDate: "2026-10-09",
+  implementationUsers: "0-9",
+  hasArchitecture: "nej",
+  checklistJournalized: "ja",
+  approvingLeader: "Peter Bjerre Ahlgren",
+  remarks: "",
+  consent: false,
+  attachments: {
+    "risk-assessment": [],
+    "data-processing-agreement": [],
+    contract: [],
+    "supplier-checklist": [],
+    architecture: [],
+  },
+};
+
+export function isRuleActive(rule: FormRule, state: ApplicationFormState) {
+  return String(state[rule.sourceField]) === rule.equals;
+}
+
+export function isFieldVisible(field: string, state: ApplicationFormState) {
+  switch (field) {
+    case "replacementSystem":
+      return state.replacesExisting === "ja";
+    case "catalogQuery":
+    case "selectedSystem":
+      return state.knownSystem === "ja" && !state.manualCatalogEntry;
+    case "manualSystem":
+      return state.knownSystem === "nej" || state.manualCatalogEntry;
+    case "marketResearchSystems":
+      return state.marketResearch === "ja";
+    case "relatedSystem":
+      return state.acquisitionType === "tilkøb";
+    case "existingProcessSystems":
+      return state.existingProcessSystem === "ja";
+    case "crossDepartments":
+    case "crossFunctionality":
+      return state.crossCutting === "ja";
+    case "budgetAmount":
+      return state.hasBudget === "ja";
+    case "riskHelp":
+      return state.hasRiskAssessment === "nej";
+    case "risk-assessment":
+      return state.hasRiskAssessment === "ja";
+    case "dpaQuestion":
+    case "dataClassification":
+      return state.personalData === "ja";
+    case "data-processing-agreement":
+      return state.personalData === "ja" && state.hasDpa === "ja";
+    case "contract":
+      return state.hasContract === "ja";
+    case "supplier-checklist":
+      return state.hasSupplierChecklist === "ja";
+    case "architecture":
+      return state.hasArchitecture === "ja";
+    default:
+      return true;
+  }
+}
+
+function required(field: string, value: unknown, message: string): FieldError | null {
+  const empty =
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0);
+  return empty ? { field, message, severity: "error" } : null;
+}
+
+function visibleRequired(
+  state: ApplicationFormState,
+  field: keyof ApplicationFormState | string,
+  value: unknown,
+  message: string,
+) {
+  return isFieldVisible(String(field), state) ? required(String(field), value, message) : null;
+}
+
+function compact(errors: Array<FieldError | null>) {
+  return errors.filter((error): error is FieldError => error !== null);
+}
+
+export function getStepErrors(state: ApplicationFormState, step: number): FieldError[] {
+  switch (step) {
+    case 0:
+      return compact([
+        state.knownSystem === "ja" && !state.manualCatalogEntry
+          ? required("selectedSystem", state.selectedSystem, "Vælg et system fra kataloget.")
+          : null,
+        visibleRequired(
+          state,
+          "manualSystem",
+          state.manualSystemName,
+          "Angiv systemets officielle navn.",
+        ),
+        visibleRequired(
+          state,
+          "replacementSystem",
+          state.replacementSystem,
+          "Vælg det system, der erstattes.",
+        ),
+        required("contactPerson", state.contactPerson, "Angiv en kontaktperson."),
+        required("department", state.department, "Angiv center eller afdeling."),
+      ]);
+    case 1:
+      return compact([
+        required("dataOwner", state.dataOwner, "Angiv dataejer."),
+        required("systemOwner", state.systemOwner, "Angiv systemejer."),
+        required("contractOwner", state.contractOwner, "Angiv kontraktejer."),
+        state.municipalityAlreadyUsesSystem === "nej"
+          ? required(
+              "responsibleOrganization",
+              state.responsibleOrganization,
+              "Angiv ansvarlig afdeling eller enhed.",
+            )
+          : null,
+      ]);
+    case 2:
+      return compact([
+        required("acquisitionMethod", state.acquisitionMethod, "Vælg anskaffelsesform."),
+        visibleRequired(
+          state,
+          "marketResearchSystems",
+          state.marketResearchSystems,
+          "Angiv de afdækkede systemer.",
+        ),
+        visibleRequired(
+          state,
+          "relatedSystem",
+          state.relatedSystem,
+          "Vælg det eksisterende system, tilkøbet vedrører.",
+        ),
+      ]);
+    case 3:
+      return compact([
+        required("purpose", state.purpose, "Beskriv formålet med anskaffelsen."),
+        required(
+          "functionDescription",
+          state.functionDescription,
+          "Beskriv systemets funktion.",
+        ),
+        visibleRequired(
+          state,
+          "existingProcessSystems",
+          state.existingProcessSystems,
+          "Angiv hvilke eksisterende systemer der understøtter processen.",
+        ),
+        visibleRequired(
+          state,
+          "crossFunctionality",
+          state.crossFunctionality,
+          "Beskriv den tværgående funktionalitet.",
+        ),
+        visibleRequired(
+          state,
+          "crossDepartments",
+          state.crossDepartments,
+          "Angiv hvilke centre eller teams der kan bruge funktionaliteten.",
+        ),
+      ]);
+    case 4: {
+      const errors = compact([
+        visibleRequired(
+          state,
+          "budgetAmount",
+          state.budgetAmount,
+          "Angiv det eksisterende budgetbeløb.",
+        ),
+        required("benefits", state.benefits, "Beskriv gevinsten."),
+      ]);
+      const amountFields: Array<[string, string]> = [
+        ["budgetAmount", state.budgetAmount],
+        ["oneTimeCost", state.oneTimeCost],
+        ["yearlyCost", state.yearlyCost],
+        ["otherCost", state.otherCost],
+      ];
+      for (const [field, value] of amountFields) {
+        if (field === "budgetAmount" && !isFieldVisible(field, state)) continue;
+        if (value && parseDanishAmount(value) === null) {
+          errors.push({
+            field,
+            message: "Beløbet skal være et gyldigt positivt tal.",
+            severity: "error",
+          });
+        }
+      }
+      return errors;
+    }
+    case 5:
+      return compact([
+        visibleRequired(
+          state,
+          "dataClassification",
+          state.dataClassification,
+          "Vælg dataklassifikation.",
+        ),
+        visibleRequired(
+          state,
+          "data-processing-agreement",
+          state.attachments["data-processing-agreement"].filter(
+            (attachment) => attachment.status === "uploaded",
+          ),
+          "Upload databehandleraftalen.",
+        ),
+        visibleRequired(
+          state,
+          "contract",
+          state.attachments.contract.filter((attachment) => attachment.status === "uploaded"),
+          "Upload kontrakten.",
+        ),
+      ]);
+    case 6: {
+      const errors = compact([
+        required(
+          "implementationResources",
+          state.implementationResources,
+          "Beskriv ressourcetrækket.",
+        ),
+        required("startDate", state.startDate, "Angiv startdato."),
+        required("endDate", state.endDate, "Angiv slutdato."),
+        required("implementationUsers", state.implementationUsers, "Vælg antal brugere."),
+      ]);
+      if (state.startDate && state.endDate && state.endDate < state.startDate) {
+        errors.push({
+          field: "endDate",
+          message: "Slutdatoen må ikke ligge før startdatoen.",
+          severity: "error",
+        });
+      }
+      return errors;
+    }
+    case 7:
+      return compact([
+        visibleRequired(
+          state,
+          "architecture",
+          state.attachments.architecture.filter((attachment) => attachment.status === "uploaded"),
+          "Upload arkitekturtegningen.",
+        ),
+      ]);
+    case 8:
+      return compact([
+        required("approvingLeader", state.approvingLeader, "Vælg den godkendende chef."),
+      ]);
+    case 9:
+      return state.consent
+        ? []
+        : [
+            {
+              field: "consent",
+              message: "Bekræft, at oplysninger og bilag er kontrolleret.",
+              severity: "error",
+            },
+          ];
+    default:
+      return [];
+  }
+}
+
+export function getStepWarnings(state: ApplicationFormState, step: number): FieldError[] {
+  const warnings: FieldError[] = [];
+  if (step === 5 && state.hasRiskAssessment === "nej") {
+    warnings.push({
+      field: "hasRiskAssessment",
+      message: "Risikovurderingen skal færdiggøres under sagsbehandlingen.",
+      severity: "warning",
+    });
+  }
+  if (step === 7 && state.hasArchitecture === "nej") {
+    warnings.push({
+      field: "hasArchitecture",
+      message: "Arkitekturtegningen mangler og bliver et opmærksomhedspunkt på sagen.",
+      severity: "warning",
+    });
+  }
+  return warnings;
+}
+
+export function getAllErrors(state: ApplicationFormState) {
+  return Array.from({ length: 10 }, (_, step) => getStepErrors(state, step)).flat();
+}
+
+export function firstInvalidStep(state: ApplicationFormState) {
+  for (let step = 0; step < 10; step += 1) {
+    if (getStepErrors(state, step).length > 0) return step;
+  }
+  return null;
+}
+
+export function canOpenStep(state: ApplicationFormState, targetStep: number) {
+  if (targetStep <= 0) return true;
+  for (let step = 0; step < targetStep; step += 1) {
+    if (getStepErrors(state, step).length > 0) return false;
+  }
+  return true;
+}
+
+export function parseDanishAmount(value: string): number | null {
+  const raw = value.trim();
+  if (!raw) return 0;
+  if (!/^\d{1,3}(?:\.\d{3})*(?:,\d{0,2})?$|^\d+(?:,\d{0,2})?$/.test(raw)) return null;
+  const parsed = Number(raw.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function formatDanishAmount(value: number) {
+  return new Intl.NumberFormat("da-DK", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+export function getFinanceTotal(state: ApplicationFormState) {
+  return [state.oneTimeCost, state.yearlyCost, state.otherCost].reduce((total, value) => {
+    const parsed = parseDanishAmount(value);
+    return total + (parsed ?? 0);
+  }, 0);
+}
+
+export function validateUpload(
+  kind: UploadKind,
+  file: { name: string; size: number; type: string },
+): string | null {
+  if (file.size > MAX_UPLOAD_BYTES) return "Filen må højst fylde 25 MB.";
+  if (file.size <= 0) return "Filen er tom.";
+
+  const extension = file.name.toLowerCase().split(".").pop() ?? "";
+  const allowedExtensions = new Set(["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg"]);
+  const documentOnly = new Set(["pdf", "doc", "docx", "xls", "xlsx"]);
+  const allowed = kind === "risk-assessment" ? documentOnly : allowedExtensions;
+  if (!allowed.has(extension)) {
+    return kind === "risk-assessment"
+      ? "Risikovurderingen skal være PDF, DOCX eller XLSX."
+      : "Filtypen understøttes ikke.";
+  }
+  const allowedMimeTypes: Record<string, string[]> = {
+    pdf: ["application/pdf"],
+    doc: ["application/msword"],
+    docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    xls: ["application/vnd.ms-excel"],
+    xlsx: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    png: ["image/png"],
+    jpg: ["image/jpeg"],
+    jpeg: ["image/jpeg"],
+  };
+  if (file.type && !allowedMimeTypes[extension]?.includes(file.type.toLowerCase())) {
+    return "Filens indholdstype passer ikke til filnavnet.";
+  }
+  return null;
+}
+
+export function createAttachmentDraft(
+  kind: UploadKind,
+  file: { name: string; size: number; type: string },
+  id = `${kind}-${file.name}-${file.size}`,
+): AttachmentDraft {
+  const error = validateUpload(kind, file);
+  return {
+    id,
+    kind,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    status: error ? "failed" : "selected",
+    ...(error ? { error } : {}),
+  };
+}
+
+export function pruneHiddenAnswers(state: ApplicationFormState) {
+  const snapshot: Record<string, unknown> = { ...state };
+  const hiddenFields = [
+    "replacementSystem",
+    "marketResearchSystems",
+    "relatedSystem",
+    "existingProcessSystems",
+    "crossFunctionality",
+    "crossDepartments",
+    "budgetAmount",
+    "dataClassification",
+    "riskHelp",
+  ];
+  for (const field of hiddenFields) {
+    if (!isFieldVisible(field, state)) delete snapshot[field];
+  }
+
+  const attachments = Object.fromEntries(
+    Object.entries(state.attachments).map(([kind, files]) => [
+      kind,
+      isFieldVisible(kind, state) ? files.filter((file) => file.status === "uploaded") : [],
+    ]),
+  );
+  snapshot.attachments = attachments;
+  if (!isFieldVisible("manualSystem", state)) {
+    for (const field of [
+      "manualSystemName",
+      "businessType",
+      "systemDescription",
+      "descriptionUrl",
+      "supplier",
+      "supplierCvr",
+      "rightsHolder",
+      "rightsHolderCvr",
+    ]) {
+      delete snapshot[field];
+    }
+  }
+  if (state.personalData === "nej") delete snapshot.hasDpa;
+  if (!isFieldVisible("riskHelp", state)) delete snapshot.needsRiskHelp;
+  return snapshot;
+}
+
+export function getDisplaySystemName(state: ApplicationFormState) {
+  return state.selectedSystem?.name || state.manualSystemName || state.catalogQuery || "Ikke valgt";
+}

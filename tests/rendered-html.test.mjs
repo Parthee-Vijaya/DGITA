@@ -40,8 +40,9 @@ test("server-renderer den færdige D-GITA-portal", async () => {
 });
 
 test("indeholder roller, workflows og ingen starter-preview", async () => {
-  const [page, layout, css, packageJson] = await Promise.all([
+  const [page, form, layout, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../features/application/ApplicationFormView.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -50,7 +51,7 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.match(page, /D-GITA-konsulent/);
   assert.match(page, /Administration/);
   assert.match(page, /Outlook/);
-  assert.match(page, /Gem og indsend/);
+  assert.match(form, /Gem og indsend/);
   assert.match(page, /WSUS klient/);
   assert.match(page, /ITA-001284/);
   assert.match(page, /application\.submitted/);

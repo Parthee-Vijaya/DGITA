@@ -1337,6 +1337,11 @@ p {
   color: white;
 }
 
+.application-rail > button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+}
+
 .rail-line {
   position: absolute;
   top: 28px;
@@ -1416,7 +1421,8 @@ p {
   border-bottom: 1px solid #e7e8e4;
 }
 
-.question-copy label {
+.question-copy label,
+.question-copy .question-title {
   display: block;
   font-size: 13px;
   font-weight: 650;
@@ -1571,6 +1577,129 @@ textarea.clean-input {
   font-size: 10px;
 }
 
+.lookup-card button,
+.upload-button {
+  min-height: 36px;
+  border: 1px solid var(--forest);
+  padding: 0 13px;
+  background: transparent;
+  color: var(--forest);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.catalog-results {
+  max-height: 390px;
+  overflow: auto;
+}
+
+.catalog-result {
+  background: white;
+}
+
+.catalog-result em,
+.catalog-selection em {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 3px 6px;
+  color: var(--blue);
+  background: var(--blue-light);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.catalog-result em.local,
+.catalog-selection em.local {
+  color: var(--forest-2);
+  background: #dfece3;
+}
+
+.catalog-empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.catalog-error {
+  color: #96392f;
+}
+
+.inline-action {
+  margin-top: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--forest-2);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 680;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.conditional-field {
+  margin-top: 15px;
+}
+
+.subfield-label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.clean-input.invalid,
+.money-field input.invalid,
+.upload-group.has-error .upload-field {
+  border-color: #a54135;
+}
+
+.field-error {
+  margin: 7px 0 0;
+  color: #96392f;
+  font-size: 10px;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.form-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin: 20px 0 4px;
+  padding: 16px 18px;
+  border: 1px solid #d5bdb8;
+  background: #fbf2f0;
+  color: #78352d;
+}
+
+.form-message.warning {
+  border-color: #d6bc6c;
+  background: var(--yellow-light);
+  color: #775304;
+}
+
+.form-message > svg {
+  flex: 0 0 auto;
+}
+
+.form-message strong {
+  font-size: 12px;
+}
+
+.form-message p {
+  margin: 4px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .source-note {
   display: flex;
   align-items: center;
@@ -1716,6 +1845,66 @@ textarea.clean-input {
   font-weight: 650;
 }
 
+.upload-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.upload-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.upload-list {
+  display: grid;
+  gap: 7px;
+  margin-top: -15px;
+}
+
+.upload-file {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #b8cdc1;
+  padding: 8px 10px;
+  background: var(--sage-light);
+}
+
+.upload-file.failed {
+  border-color: #d5bdb8;
+  background: #fbf2f0;
+}
+
+.upload-file div {
+  display: flex;
+  flex-direction: column;
+}
+
+.upload-file strong {
+  font-size: 11px;
+}
+
+.upload-file small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.upload-file button {
+  border: 0;
+  padding: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
 .requirement-alert {
   border-color: #d6bc6c;
   background: var(--yellow-light);
@@ -1815,6 +2004,11 @@ textarea.clean-input {
   place-items: center;
   background: var(--forest);
   color: white;
+}
+
+.consent-check input:not(:checked) + span {
+  border: 1px solid var(--line-dark);
+  background: white;
 }
 
 .sheet-footer {

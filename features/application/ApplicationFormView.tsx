@@ -1,0 +1,1005 @@
+"use client";
+
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  CircleHelp,
+  Info,
+  Mail,
+  Paperclip,
+  Search,
+  Send,
+  Sparkles,
+  Upload,
+  X,
+} from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
+
+import type { CatalogSystem } from "../catalog/search";
+import {
+  canOpenStep,
+  createAttachmentDraft,
+  firstInvalidStep,
+  formatDanishAmount,
+  getAllErrors,
+  getDisplaySystemName,
+  getFinanceTotal,
+  getStepErrors,
+  getStepWarnings,
+  initialApplicationState,
+  isFieldVisible,
+  pruneHiddenAnswers,
+  type ApplicationFormState,
+  type AttachmentDraft,
+  type FieldError,
+  type SelectedCatalogSystem,
+  type UploadKind,
+  type YesNo,
+} from "./engine";
+import {
+  deleteLocalAttachment,
+  getLatestLocalDraft,
+  saveLocalAttachment,
+  saveLocalDraft,
+} from "./local-persistence";
+
+const steps = [
+  "Generelle oplysninger",
+  "Systemoplysninger",
+  "Anskaffelsesform",
+  "Værdi for kommunen",
+  "Investering",
+  "Risiko & data",
+  "Implementering",
+  "IT-krav",
+  "Øvrige",
+  "Gennemse",
+];
+
+const descriptions = [
+  "Vi starter med at afklare systemet, kontaktpersonen og organisationen.",
+  "Angiv ansvar for data, system, kontrakt og den tilhørende ESDH-sag.",
+  "Beskriv hvordan systemet anskaffes, og hvordan markedet er undersøgt.",
+  "Gør det tydeligt, hvilken forandring og værdi systemet skal skabe.",
+  "Saml omkostninger, budget og forventede gevinster.",
+  "Vurdér risiko, persondata og behovet for aftaler og dokumentation.",
+  "Planlæg milepæle, ressourcer, datoer og antal brugere.",
+  "Dokumentér arkitektur, leverandørkrav og systemets sammenhænge.",
+  "Vælg den godkendende chef, og tilføj eventuelle bemærkninger.",
+  "Kontrollér oplysningerne, før ansøgningen låses og sendes.",
+];
+
+type Props = {
+  onBack: () => void;
+  onSubmit: (snapshot: Record<string, unknown>) => void;
+  onToast: (message: string) => void;
+};
+
+type StorageMode = "server" | "local";
+
+class ServerPersistenceUnavailableError extends Error {
+  constructor() {
+    super("Serverlagring er midlertidigt utilgængelig.");
+    this.name = "ServerPersistenceUnavailableError";
+  }
+}
+
+export function ApplicationFormView({ onBack, onSubmit, onToast }: Props) {
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState<ApplicationFormState>(() =>
+    structuredClone(initialApplicationState),
+  );
+  const [attemptedSteps, setAttemptedSteps] = useState<number[]>([]);
+  const [results, setResults] = useState<CatalogSystem[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<
+    "loading" | "idle" | "saving" | "saved" | "error"
+  >("loading");
+  const draftIdRef = useRef<string | null>(null);
+  const formRef = useRef(form);
+  const storageModeRef = useRef<StorageMode>("server");
+  const [storageMode, setStorageMode] = useState<StorageMode>("server");
+  const currentErrors = getStepErrors(form, step);
+  const currentWarnings = getStepWarnings(form, step);
+  const showErrors = attemptedSteps.includes(step);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/drafts", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (response.status === 503) {
+          throw new ServerPersistenceUnavailableError();
+        }
+        if (!response.ok) throw new Error("Kladden kunne ikke hentes.");
+        const payload = (await response.json()) as {
+          draft: { id: string; state: ApplicationFormState } | null;
+        };
+        if (controller.signal.aborted) return;
+        if (payload.draft?.state.schemaVersion === "dgita-v1") {
+          draftIdRef.current = payload.draft.id;
+          formRef.current = payload.draft.state;
+          setForm(payload.draft.state);
+          setSaveStatus("saved");
+        } else {
+          draftIdRef.current = crypto.randomUUID();
+          setSaveStatus("idle");
+        }
+      } catch (error) {
+        if ((error as Error).name === "AbortError") return;
+        if (shouldUseLocalFallback(error)) {
+          storageModeRef.current = "local";
+          setStorageMode("local");
+          try {
+            const localDraft = await getLatestLocalDraft();
+            if (controller.signal.aborted) return;
+            if (localDraft) {
+              draftIdRef.current = localDraft.id;
+              formRef.current = localDraft.state;
+              setForm(localDraft.state);
+              setSaveStatus("saved");
+            } else {
+              draftIdRef.current = crypto.randomUUID();
+              setSaveStatus("idle");
+            }
+          } catch {
+            if (controller.signal.aborted) return;
+            draftIdRef.current = crypto.randomUUID();
+            setSaveStatus("error");
+          }
+        } else {
+          draftIdRef.current = crypto.randomUUID();
+          setSaveStatus("error");
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const query = form.catalogQuery.trim();
+    if (
+      query.length < 2 ||
+      form.knownSystem !== "ja" ||
+      form.manualCatalogEntry ||
+      form.selectedSystem
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setCatalogLoading(true);
+      setCatalogError(null);
+      try {
+        const response = await fetch(`/api/catalog?q=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Katalogsøgningen svarede ikke.");
+        const payload = (await response.json()) as { results: CatalogSystem[] };
+        setResults(payload.results);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          setResults([]);
+          setCatalogError(
+            "Systemkataloget kan ikke kontaktes lige nu. Prøv igen, før du registrerer systemet manuelt.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) setCatalogLoading(false);
+      }
+    }, 180);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [
+    form.catalogQuery,
+    form.knownSystem,
+    form.manualCatalogEntry,
+    form.selectedSystem,
+  ]);
+
+  function update<K extends keyof ApplicationFormState>(
+    field: K,
+    value: ApplicationFormState[K],
+  ) {
+    setSaveStatus("idle");
+    changeForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function changeForm(
+    updater: (current: ApplicationFormState) => ApplicationFormState,
+  ) {
+    const next = updater(formRef.current);
+    formRef.current = next;
+    setForm(next);
+    return next;
+  }
+
+  function switchToLocalStorage() {
+    storageModeRef.current = "local";
+    setStorageMode("local");
+  }
+
+  async function persistDraft(
+    status: "draft" | "submitted" = "draft",
+    state: ApplicationFormState = formRef.current,
+  ) {
+    const id = draftIdRef.current ?? crypto.randomUUID();
+    draftIdRef.current = id;
+    setSaveStatus("saving");
+
+    try {
+      if (storageModeRef.current === "local") {
+        await saveLocalDraft(id, state, status);
+        setSaveStatus("saved");
+        return { id, mode: "local" as const };
+      }
+
+      const response = await fetch("/api/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, draft: state, status }),
+      });
+      if (response.status === 503) {
+        throw new ServerPersistenceUnavailableError();
+      }
+      const payload = (await response.json()) as { error?: string; id?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Kladden kunne ikke gemmes.");
+      }
+
+      setSaveStatus("saved");
+      return { id, mode: "server" as const };
+    } catch (error) {
+      if (storageModeRef.current === "server" && shouldUseLocalFallback(error)) {
+        switchToLocalStorage();
+        await saveLocalDraft(id, state, status);
+        setSaveStatus("saved");
+        return { id, mode: "local" as const };
+      }
+      setSaveStatus("error");
+      throw error;
+    }
+  }
+
+  function setYesNo(field: keyof ApplicationFormState, value: string) {
+    update(field, value as ApplicationFormState[typeof field]);
+  }
+
+  function markAttempted(targetStep: number) {
+    setAttemptedSteps((current) =>
+      current.includes(targetStep) ? current : [...current, targetStep],
+    );
+  }
+
+  function errorFor(field: string) {
+    if (!showErrors) return undefined;
+    return currentErrors.find((error) => error.field === field)?.message;
+  }
+
+  function goToStep(target: number) {
+    if (!canOpenStep(form, target)) {
+      const blockedAt = firstInvalidStep(form) ?? step;
+      markAttempted(blockedAt);
+      setStep(blockedAt);
+      onToast("Udfyld de markerede felter, før du går videre.");
+      return;
+    }
+    setStep(target);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function continueForm() {
+    markAttempted(step);
+    if (currentErrors.length > 0) {
+      onToast("Udfyld de markerede felter, før du går videre.");
+      return;
+    }
+    goToStep(Math.min(step + 1, steps.length - 1));
+  }
+
+  function chooseSystem(system: CatalogSystem) {
+    const selection: SelectedCatalogSystem = {
+      id: system.id,
+      name: system.name,
+      supplier: system.supplier,
+      rightsHolder: system.rightsHolder,
+      source: system.source,
+      usedInKalundborg: system.usedInKalundborg,
+      ...(system.localSystemId ? { localSystemId: system.localSystemId } : {}),
+      ...(system.localStatus ? { localStatus: system.localStatus } : {}),
+      ...(system.kitosStatus ? { kitosStatus: system.kitosStatus } : {}),
+    };
+    setSaveStatus("idle");
+    changeForm((current) => ({
+      ...current,
+      selectedSystem: selection,
+      catalogQuery: system.name,
+      supplier: current.supplier || system.supplier,
+      rightsHolder: current.rightsHolder || system.rightsHolder,
+      manualCatalogEntry: false,
+      existsInKitos: "ja",
+      municipalityAlreadyUsesSystem:
+        system.usedInKalundborg && system.localStatus !== "Ikke aktivt" ? "ja" : "nej",
+    }));
+    setResults([]);
+    setCatalogLoading(false);
+    setCatalogError(null);
+  }
+
+  async function addFiles(kind: UploadKind, event: ChangeEvent<HTMLInputElement>) {
+    const incoming = Array.from(event.target.files ?? []).map((file) => {
+      const attachment = createAttachmentDraft(kind, file, crypto.randomUUID());
+      return {
+        file,
+        attachment:
+          attachment.status === "failed"
+            ? attachment
+            : { ...attachment, status: "uploading" as const },
+      };
+    });
+    event.target.value = "";
+    if (incoming.length === 0) return;
+    const stateWithIncoming = changeForm((current) => ({
+      ...current,
+      attachments: {
+        ...current.attachments,
+        [kind]: [
+          ...current.attachments[kind],
+          ...incoming.map(({ attachment }) => attachment),
+        ],
+      },
+    }));
+
+    const validFiles = incoming.filter(
+      ({ attachment }) => attachment.status === "uploading",
+    );
+    if (validFiles.length === 0) return;
+
+    let activeDraftId: string;
+    try {
+      activeDraftId = (await persistDraft("draft", stateWithIncoming)).id;
+    } catch (error) {
+      const message = (error as Error).message;
+      changeForm((current) => ({
+        ...current,
+        attachments: {
+          ...current.attachments,
+          [kind]: current.attachments[kind].map((attachment) =>
+            validFiles.some(({ attachment: valid }) => valid.id === attachment.id)
+              ? { ...attachment, status: "failed", error: message }
+              : attachment,
+          ),
+        },
+      }));
+      return;
+    }
+
+    let usedLocalStorage = storageModeRef.current === "local";
+    for (const { file, attachment: pending } of validFiles) {
+      let uploadedAttachment: AttachmentDraft | null = null;
+      try {
+        if (storageModeRef.current === "server") {
+          const upload = new FormData();
+          upload.set("draftId", activeDraftId);
+          upload.set("kind", kind);
+          upload.set("file", file);
+
+          try {
+            const response = await fetch("/api/uploads", {
+              method: "POST",
+              body: upload,
+            });
+            if (response.status === 503) {
+              throw new ServerPersistenceUnavailableError();
+            }
+            const payload = (await response.json()) as {
+              attachment?: AttachmentDraft;
+              error?: string;
+            };
+            if (!response.ok || !payload.attachment) {
+              throw new Error(payload.error || "Filen kunne ikke uploades.");
+            }
+            uploadedAttachment = payload.attachment;
+          } catch (error) {
+            if (!shouldUseLocalFallback(error)) throw error;
+            switchToLocalStorage();
+            usedLocalStorage = true;
+          }
+        }
+
+        if (storageModeRef.current === "local") {
+          uploadedAttachment = {
+            ...pending,
+            status: "uploaded",
+            error: undefined,
+          };
+          await saveLocalAttachment(activeDraftId, uploadedAttachment, file);
+        }
+
+        if (!uploadedAttachment) {
+          throw new Error("Filen kunne ikke gemmes.");
+        }
+
+        const nextState = replaceAttachment(
+          formRef.current,
+          kind,
+          pending.id,
+          uploadedAttachment,
+        );
+        if (storageModeRef.current === "local") {
+          await saveLocalDraft(activeDraftId, nextState, "draft");
+          setSaveStatus("saved");
+        }
+        formRef.current = nextState;
+        setForm(nextState);
+      } catch (error) {
+        if (storageModeRef.current === "local") setSaveStatus("error");
+        if (storageModeRef.current === "local" && uploadedAttachment) {
+          await deleteLocalAttachment(activeDraftId, uploadedAttachment.id).catch(
+            () => undefined,
+          );
+        }
+        changeForm((current) =>
+          replaceAttachment(current, kind, pending.id, {
+            ...pending,
+            status: "failed",
+            error: (error as Error).message,
+          }),
+        );
+      }
+    }
+
+    if (usedLocalStorage) {
+      onToast("Bilagene er gemt lokalt på denne enhed.");
+    }
+  }
+
+  async function removeFile(kind: UploadKind, id: string) {
+    const attachment = formRef.current.attachments[kind].find((file) => file.id === id);
+    const draftId = draftIdRef.current;
+    if (attachment?.status === "uploaded" && draftId) {
+      try {
+        if (storageModeRef.current === "server") {
+          const response = await fetch("/api/uploads", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, draftId }),
+          });
+          if (response.status === 503) {
+            throw new ServerPersistenceUnavailableError();
+          }
+          if (!response.ok) {
+            throw new Error("Bilaget kunne ikke fjernes. Prøv igen.");
+          }
+        } else {
+          await deleteLocalAttachment(draftId, id);
+        }
+      } catch (error) {
+        if (storageModeRef.current === "server" && shouldUseLocalFallback(error)) {
+          switchToLocalStorage();
+          await deleteLocalAttachment(draftId, id);
+        } else {
+          onToast((error as Error).message);
+          return;
+        }
+      }
+    }
+
+    const nextState = changeForm((current) => ({
+      ...current,
+      attachments: {
+        ...current.attachments,
+        [kind]: current.attachments[kind].filter((file) => file.id !== id),
+      },
+    }));
+    if (storageModeRef.current === "local" && draftId) {
+      try {
+        await saveLocalDraft(draftId, nextState, "draft");
+        setSaveStatus("saved");
+      } catch (error) {
+        setSaveStatus("error");
+        onToast((error as Error).message);
+      }
+    }
+  }
+
+  async function submit() {
+    const currentForm = formRef.current;
+    const errors = getAllErrors(currentForm);
+    if (errors.length > 0) {
+      const invalidStep = firstInvalidStep(currentForm) ?? step;
+      markAttempted(invalidStep);
+      setStep(invalidStep);
+      onToast("Ansøgningen mangler oplysninger, før den kan indsendes.");
+      return;
+    }
+    try {
+      const result = await persistDraft("submitted", currentForm);
+      if (result.mode === "local") {
+        onToast("Ansøgningen er gemt lokalt på denne enhed, men er ikke sendt til behandling.");
+        return;
+      }
+      onSubmit(pruneHiddenAnswers(currentForm));
+    } catch (error) {
+      onToast((error as Error).message);
+    }
+  }
+
+  async function saveDraft() {
+    try {
+      const result = await persistDraft("draft", formRef.current);
+      onToast(
+        result.mode === "local"
+          ? "Kladden er gemt lokalt på denne enhed."
+          : "Kladden er gemt sikkert.",
+      );
+    } catch (error) {
+      onToast((error as Error).message);
+    }
+  }
+
+  return (
+    <div className="application-page page-width">
+      <div className="application-top">
+        <button className="back-text" type="button" onClick={onBack}>
+          <ArrowLeft size={18} /> Mine ansøgninger
+        </button>
+        <span><Check size={16} /> {saveStatusText(saveStatus, storageMode)}</span>
+      </div>
+      <div className="application-title">
+        <div>
+          <span className="section-label dark">Ny IT-anskaffelse</span>
+          <h1>Opret ansøgning</h1>
+          <p>Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs.</p>
+        </div>
+        <div className="application-progress"><strong>{step + 1}</strong><span>af {steps.length}</span></div>
+      </div>
+
+      <div className="application-layout">
+        <aside className="application-rail">
+          <div className="rail-line" aria-hidden="true" />
+          {steps.map((label, index) => {
+            const unlocked = canOpenStep(form, index);
+            const complete = index < step && getStepErrors(form, index).length === 0;
+            return (
+              <button
+                className={cx(index === step && "active", complete && "complete")}
+                type="button"
+                key={label}
+                disabled={!unlocked}
+                aria-current={index === step ? "step" : undefined}
+                aria-label={`${label}${unlocked ? "" : " – låst"}`}
+                onClick={() => goToStep(index)}
+              >
+                <span>{complete ? <Check size={15} /> : index + 1}</span><strong>{label}</strong>
+              </button>
+            );
+          })}
+          <div className="rail-help"><CircleHelp size={20} /><div><strong>Brug for hjælp?</strong><p>Book et formøde med din lokale konsulent.</p><button type="button" onClick={() => onToast("Formøde er klar til booking")}>Book formøde</button></div></div>
+        </aside>
+
+        <section className="application-sheet">
+          <div className="sheet-heading">
+            <span>Trin {step + 1}</span><h2>{steps[step]}</h2><p>{descriptions[step]}</p>
+          </div>
+          <div className="sheet-fields">
+            {showErrors && currentErrors.length > 0 ? (
+              <FormMessage tone="error" title={`${currentErrors.length} felt${currentErrors.length === 1 ? "" : "er"} skal rettes`} messages={currentErrors.map((error) => error.message)} />
+            ) : null}
+            {currentWarnings.length > 0 ? (
+              <FormMessage tone="warning" title="Opmærksomhedspunkt" messages={currentWarnings.map((warning) => warning.message)} />
+            ) : null}
+
+            {step === 0 ? (
+              <>
+                <Question title="1. Ved du allerede nu hvilket IT-system du vil indkøbe?" hint="Hvis systemet findes i KITOS, kan flere felter udfyldes automatisk.">
+                  <Choice value={form.knownSystem} onChange={(value) => {
+                    setSaveStatus("idle");
+                    setResults([]);
+                    setCatalogLoading(false);
+                    setCatalogError(null);
+                    changeForm((current) => ({
+                      ...current,
+                      knownSystem: value as YesNo,
+                      selectedSystem: value === "ja" ? current.selectedSystem : null,
+                      manualCatalogEntry: false,
+                      existsInKitos: value === "ja" ? current.existsInKitos : "nej",
+                      municipalityAlreadyUsesSystem:
+                        value === "ja" ? current.municipalityAlreadyUsesSystem : "nej",
+                      supplier:
+                        value === "nej" && current.supplier === current.selectedSystem?.supplier
+                          ? ""
+                          : current.supplier,
+                      rightsHolder:
+                        value === "nej" &&
+                        current.rightsHolder === current.selectedSystem?.rightsHolder
+                          ? ""
+                          : current.rightsHolder,
+                    }));
+                  }} options={[{ value: "ja", label: "Ja" }, { value: "nej", label: "Nej" }]} />
+                </Question>
+                <Question title="2. Erstatter det et allerede eksisterende IT-system?">
+                  <Choice value={form.replacesExisting} onChange={(value) => setYesNo("replacesExisting", value)} options={yesNoOptions} />
+                  {isFieldVisible("replacementSystem", form) ? (
+                    <div className="conditional-field">
+                      <label className="subfield-label" htmlFor="replacement-system">2.1 Hvilket system erstattes?</label>
+                      <input id="replacement-system" className={cx("clean-input", errorFor("replacementSystem") && "invalid")} value={form.replacementSystem} onChange={(event) => update("replacementSystem", event.target.value)} />
+                      <FieldErrorText message={errorFor("replacementSystem")} />
+                    </div>
+                  ) : null}
+                </Question>
+
+                {isFieldVisible("catalogQuery", form) ? (
+                  <Question title="3. Søg IT-systemnavnet i KITOS" hint="Resultatet viser samtidig, om systemet bruges i Kalundborg.">
+                    <div className="lookup-field">
+                      <Search size={18} />
+                      <input
+                        className={cx("clean-input", errorFor("selectedSystem") && "invalid")}
+                        value={form.catalogQuery}
+                        placeholder="Søg på system, leverandør eller rettighedshaver"
+                        onChange={(event) => {
+                          setSaveStatus("idle");
+                          setResults([]);
+                          setCatalogLoading(false);
+                          setCatalogError(null);
+                          changeForm((current) => ({ ...current, catalogQuery: event.target.value, selectedSystem: null }));
+                        }}
+                      />
+                    </div>
+                    <FieldErrorText message={errorFor("selectedSystem")} />
+                    {form.selectedSystem ? (
+                      <CatalogSelection system={form.selectedSystem} />
+                    ) : (
+                      <div className="catalog-results" aria-live="polite">
+                        {catalogLoading ? <p className="catalog-empty">Søger i KITOS og Kalundborgs systemer…</p> : null}
+                        {results.map((system) => <CatalogResult key={system.id} system={system} onChoose={() => chooseSystem(system)} />)}
+                        {catalogError ? <p className="catalog-empty catalog-error" role="alert">{catalogError}</p> : null}
+                        {!catalogLoading && !catalogError && form.catalogQuery.trim().length >= 2 && results.length === 0 ? <p className="catalog-empty">Ingen sikre resultater. Kontrollér stavningen eller registrér systemet manuelt.</p> : null}
+                      </div>
+                    )}
+                    <button className="inline-action" type="button" onClick={() => {
+                      setSaveStatus("idle");
+                      setResults([]);
+                      setCatalogLoading(false);
+                      setCatalogError(null);
+                      changeForm((current) => ({
+                        ...current,
+                        manualCatalogEntry: true,
+                        selectedSystem: null,
+                        existsInKitos: "nej",
+                        municipalityAlreadyUsesSystem: "nej",
+                      }));
+                    }}>Systemet findes ikke i kataloget</button>
+                  </Question>
+                ) : null}
+
+                <Question title="4. Findes IT-systemet i KITOS under IT Systemkatalog?">
+                  <Choice value={form.existsInKitos} onChange={(value) => {
+                    setSaveStatus("idle");
+                    if (value === "nej") {
+                      changeForm((current) => ({
+                        ...current,
+                        existsInKitos: "nej",
+                        manualCatalogEntry: true,
+                        selectedSystem: null,
+                        municipalityAlreadyUsesSystem: "nej",
+                        supplier:
+                          current.supplier === current.selectedSystem?.supplier
+                            ? ""
+                            : current.supplier,
+                        rightsHolder:
+                          current.rightsHolder === current.selectedSystem?.rightsHolder
+                            ? ""
+                            : current.rightsHolder,
+                      }));
+                    } else {
+                      changeForm((current) => ({
+                        ...current,
+                        knownSystem: "ja",
+                        existsInKitos: "ja",
+                        manualCatalogEntry: false,
+                      }));
+                    }
+                  }} options={yesNoOptions} />
+                </Question>
+                <Question title="5. Benytter kommunen allerede dette IT-system?" hint="Katalogvalget foreslår svaret ud fra Kalundborg-listen; kontrollér det før du fortsætter.">
+                  <Choice value={form.municipalityAlreadyUsesSystem} onChange={(value) => setYesNo("municipalityAlreadyUsesSystem", value)} options={yesNoOptions} />
+                </Question>
+
+                {isFieldVisible("manualSystem", form) ? (
+                  <>
+                    <div className="source-note"><Info size={19} /><div><strong>Nyt eller ukendt system</strong><p>Oplysningerne registreres manuelt og kan senere matches til KITOS.</p></div></div>
+                    <Question title="9. IT-systemnavn"><input className={cx("clean-input", errorFor("manualSystem") && "invalid")} value={form.manualSystemName} onChange={(event) => update("manualSystemName", event.target.value)} /><FieldErrorText message={errorFor("manualSystem")} /></Question>
+                    <div className="two-column-fields">
+                      <Question title="10. Forretningsmæssig type"><input className="clean-input" value={form.businessType} onChange={(event) => update("businessType", event.target.value)} /></Question>
+                      <Question title="12. Link til systembeskrivelse"><input className="clean-input" type="url" value={form.descriptionUrl} onChange={(event) => update("descriptionUrl", event.target.value)} /></Question>
+                    </div>
+                    <Question title="11. Kort systembeskrivelse"><textarea className="clean-input" rows={4} value={form.systemDescription} onChange={(event) => update("systemDescription", event.target.value)} /></Question>
+                    <div className="two-column-fields">
+                      <Question title="13. Leverandør"><input className="clean-input" value={form.supplier} onChange={(event) => update("supplier", event.target.value)} /></Question>
+                      <Question title="14. Leverandørens CVR"><input className="clean-input" value={form.supplierCvr} onChange={(event) => update("supplierCvr", event.target.value)} /></Question>
+                      <Question title="15. Rettighedshaver"><input className="clean-input" value={form.rightsHolder} onChange={(event) => update("rightsHolder", event.target.value)} /></Question>
+                      <Question title="16. Rettighedshaverens CVR"><input className="clean-input" value={form.rightsHolderCvr} onChange={(event) => update("rightsHolderCvr", event.target.value)} /></Question>
+                    </div>
+                    {form.knownSystem === "ja" ? <button className="inline-action" type="button" onClick={() => update("manualCatalogEntry", false)}>Tilbage til katalogsøgning</button> : null}
+                  </>
+                ) : null}
+
+                <div className="two-column-fields">
+                  <Question title="6. Kontaktperson – navn"><input className={cx("clean-input", errorFor("contactPerson") && "invalid")} value={form.contactPerson} onChange={(event) => update("contactPerson", event.target.value)} /><FieldErrorText message={errorFor("contactPerson")} /></Question>
+                  <Question title="7. Center / afdeling"><input className={cx("clean-input", errorFor("department") && "invalid")} value={form.department} onChange={(event) => update("department", event.target.value)} /><FieldErrorText message={errorFor("department")} /></Question>
+                </div>
+              </>
+            ) : null}
+
+            {step === 1 ? (
+              <>
+                <div className="source-note"><Sparkles size={19} /><div><strong>{form.selectedSystem ? "Systemoplysninger fra kataloget" : "Manuelt registreret system"}</strong><p>Kontrollér ansvar og journalreferencer før du går videre.</p></div></div>
+                <div className="two-column-fields">
+                  <Question title="17. Dataejer" hint="Chef eller leder med ansvar for afdelingens data."><input className={cx("clean-input", errorFor("dataOwner") && "invalid")} value={form.dataOwner} onChange={(event) => update("dataOwner", event.target.value)} /><FieldErrorText message={errorFor("dataOwner")} /></Question>
+                  <Question title="18. Systemejer"><input className={cx("clean-input", errorFor("systemOwner") && "invalid")} value={form.systemOwner} onChange={(event) => update("systemOwner", event.target.value)} /><FieldErrorText message={errorFor("systemOwner")} /></Question>
+                  <Question title="19. Kontraktejer"><input className={cx("clean-input", errorFor("contractOwner") && "invalid")} value={form.contractOwner} onChange={(event) => update("contractOwner", event.target.value)} /><FieldErrorText message={errorFor("contractOwner")} /></Question>
+                  <Question title="24. Ansvarlig afdeling / enhed"><input className={cx("clean-input", errorFor("responsibleOrganization") && "invalid")} value={form.responsibleOrganization} onChange={(event) => update("responsibleOrganization", event.target.value)} /><FieldErrorText message={errorFor("responsibleOrganization")} /></Question>
+                  <Question title="20. Systemadministratorer"><input className="clean-input" value={form.systemAdministrators} onChange={(event) => update("systemAdministrators", event.target.value)} /></Question>
+                  <Question title="21. Superbrugere"><input className="clean-input" value={form.superUsers} onChange={(event) => update("superUsers", event.target.value)} /></Question>
+                </div>
+                <Question title="22. Link til kontraktsag i ESDH" hint="Gem kontrakt, korrespondance og øvrige bilag på sagen."><input className="clean-input" type="url" placeholder="https://esdh.kommune.dk/sag/..." value={form.esdhContractUrl} onChange={(event) => update("esdhContractUrl", event.target.value)} /></Question>
+                <Question title="23. Link til databehandleraftale i ESDH"><input className="clean-input" type="url" placeholder="https://esdh.kommune.dk/sag/..." value={form.esdhDpaUrl} onChange={(event) => update("esdhDpaUrl", event.target.value)} /></Question>
+              </>
+            ) : null}
+
+            {step === 2 ? (
+              <>
+                <Question title="25. Anskaffelsesform" hint="Anskaffelsesformen har betydning for kravspecifikationens detaljeringsgrad."><select className={cx("clean-input", errorFor("acquisitionMethod") && "invalid")} value={form.acquisitionMethod} onChange={(event) => update("acquisitionMethod", event.target.value)}><option>DIGIT udbud/aftale</option><option>Direkte tildeling</option><option>Gratis</option><option>KOMBIT/KL/Offentligt projekt</option><option>SKI-aftale</option></select><FieldErrorText message={errorFor("acquisitionMethod")} /></Question>
+                <Question title="26. Er der gennemført markedsafdækning?" hint="Har du undersøgt, hvilke løsninger der bedst matcher behov, pris og kvalitet?"><Choice value={form.marketResearch} onChange={(value) => setYesNo("marketResearch", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("marketResearchSystems", form) ? <Question title="26.1 Hvilke IT-systemer er afdækket?"><textarea className={cx("clean-input", errorFor("marketResearchSystems") && "invalid")} rows={4} value={form.marketResearchSystems} onChange={(event) => update("marketResearchSystems", event.target.value)} /><FieldErrorText message={errorFor("marketResearchSystems")} /></Question> : null}
+                <Question title="27. Nyanskaffelse / tilkøb"><Choice value={form.acquisitionType} onChange={(value) => update("acquisitionType", value as ApplicationFormState["acquisitionType"])} options={[{ value: "nyanskaffelse", label: "Nyanskaffelse" }, { value: "tilkøb", label: "Tilkøb" }]} /></Question>
+                {isFieldVisible("relatedSystem", form) ? <Question title="27.1 Hvilket eksisterende system vedrører tilkøbet?"><input className={cx("clean-input", errorFor("relatedSystem") && "invalid")} value={form.relatedSystem} onChange={(event) => update("relatedSystem", event.target.value)} /><FieldErrorText message={errorFor("relatedSystem")} /></Question> : null}
+              </>
+            ) : null}
+
+            {step === 3 ? (
+              <>
+                <Question title="28. Formålsbeskrivelse" hint="Hvorfor er anskaffelsen nødvendig? Beskriv effekt og resultater."><textarea className={cx("clean-input", errorFor("purpose") && "invalid")} rows={5} value={form.purpose} onChange={(event) => update("purpose", event.target.value)} /><FieldErrorText message={errorFor("purpose")} /></Question>
+                <Question title="29. Funktionsbeskrivelse" hint="Overvej først, om et eksisterende system allerede kan løse opgaven."><textarea className={cx("clean-input", errorFor("functionDescription") && "invalid")} rows={5} value={form.functionDescription} onChange={(event) => update("functionDescription", event.target.value)} /><FieldErrorText message={errorFor("functionDescription")} /></Question>
+                <Question title="30. Hvilke arbejdsprocesser understøttes?" hint="Angiv relevante KLE-emner, adskilt med komma."><input className="clean-input" value={form.kleTopics.join(", ")} onChange={(event) => update("kleTopics", splitList(event.target.value))} /></Question>
+                <Question title="31. Understøttes processen allerede af et eksisterende system?"><Choice value={form.existingProcessSystem} onChange={(value) => setYesNo("existingProcessSystem", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("existingProcessSystems", form) ? <Question title="31.1 Hvilke systemer understøtter processen i dag?"><textarea className={cx("clean-input", errorFor("existingProcessSystems") && "invalid")} rows={3} value={form.existingProcessSystems} onChange={(event) => update("existingProcessSystems", event.target.value)} /><FieldErrorText message={errorFor("existingProcessSystems")} /></Question> : null}
+                <Question title="32. Kan andre centre eller teams have gavn af funktionaliteten?"><Choice value={form.crossCutting} onChange={(value) => setYesNo("crossCutting", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("crossFunctionality", form) ? <Question title="32.1 Beskriv den tværgående funktionalitet"><textarea className={cx("clean-input", errorFor("crossFunctionality") && "invalid")} rows={3} value={form.crossFunctionality} onChange={(event) => update("crossFunctionality", event.target.value)} /><FieldErrorText message={errorFor("crossFunctionality")} /></Question> : null}
+                {isFieldVisible("crossDepartments", form) ? <Question title="32.2 Hvilke centre eller teams?" hint="Adskil flere enheder med komma."><input className={cx("clean-input", errorFor("crossDepartments") && "invalid")} value={form.crossDepartments.join(", ")} onChange={(event) => update("crossDepartments", splitList(event.target.value))} /><FieldErrorText message={errorFor("crossDepartments")} /></Question> : null}
+              </>
+            ) : null}
+
+            {step === 4 ? (
+              <>
+                <Question title="33. Er der et eksisterende budget at købe for?"><Choice value={form.hasBudget} onChange={(value) => setYesNo("hasBudget", value)} options={yesNoOptions} />{isFieldVisible("budgetAmount", form) ? <div className="conditional-field"><label className="subfield-label" htmlFor="budget-amount">33.1 Eksisterende budgetbeløb</label><Money id="budget-amount" value={form.budgetAmount} error={errorFor("budgetAmount")} onChange={(value) => update("budgetAmount", value)} /></div> : null}</Question>
+                <div className="finance-overview"><span>Samlet finansiering</span><strong>{formatDanishAmount(getFinanceTotal(form))} kr.</strong><small>Beregnet ud fra felterne nedenfor</small></div>
+                <div className="three-column-fields">
+                  <Question title="34. Engangsomkostninger"><Money value={form.oneTimeCost} error={errorFor("oneTimeCost")} onChange={(value) => update("oneTimeCost", value)} /></Question>
+                  <Question title="35. Årlige driftsudgifter"><Money value={form.yearlyCost} error={errorFor("yearlyCost")} onChange={(value) => update("yearlyCost", value)} /></Question>
+                  <Question title="36. Andre omkostninger"><Money value={form.otherCost} error={errorFor("otherCost")} onChange={(value) => update("otherCost", value)} /></Question>
+                </div>
+                <Question title="38. Beskrivelse af gevinsten"><textarea className={cx("clean-input", errorFor("benefits") && "invalid")} rows={4} value={form.benefits} onChange={(event) => update("benefits", event.target.value)} /><FieldErrorText message={errorFor("benefits")} /></Question>
+              </>
+            ) : null}
+
+            {step === 5 ? (
+              <>
+                <Question title="Har du allerede lavet en risikovurdering?" hint="Risikovurderingen skal bruges, før ansøgningen kan vurderes."><Choice value={form.hasRiskAssessment} onChange={(value) => setYesNo("hasRiskAssessment", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("riskHelp", form) ? <Question title="Har du brug for hjælp til risikovurdering?"><Choice value={form.needsRiskHelp} onChange={(value) => setYesNo("needsRiskHelp", value)} options={yesNoOptions} /></Question> : null}
+                {isFieldVisible("risk-assessment", form) ? <UploadField kind="risk-assessment" title="Upload risikovurdering" detail="PDF, DOCX eller XLSX · maks. 25 MB" files={form.attachments["risk-assessment"]} onAdd={addFiles} onRemove={removeFile} /> : null}
+                <Question title="43. Behandler IT-systemet persondata?"><Choice value={form.personalData} onChange={(value) => setYesNo("personalData", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("dpaQuestion", form) ? <Question title="44. Har du allerede en databehandleraftale?"><Choice value={form.hasDpa} onChange={(value) => setYesNo("hasDpa", value)} options={yesNoOptions} /></Question> : null}
+                {isFieldVisible("dataClassification", form) ? <Question title="41. Klassifikation af data"><select className={cx("clean-input", errorFor("dataClassification") && "invalid")} value={form.dataClassification} onChange={(event) => update("dataClassification", event.target.value)}><option>1. Almindelige personoplysninger</option><option>2. Følsomme personoplysninger</option><option>3. Fortrolige oplysninger</option><option>4. CPR data</option></select><FieldErrorText message={errorFor("dataClassification")} /></Question> : null}
+                {isFieldVisible("data-processing-agreement", form) ? <UploadField kind="data-processing-agreement" title="Upload databehandleraftale" detail="Dokumentet er obligatorisk, når aftalen findes" files={form.attachments["data-processing-agreement"]} error={errorFor("data-processing-agreement")} onAdd={addFiles} onRemove={removeFile} /> : null}
+                <Question title="Har du allerede en kontrakt?"><Choice value={form.hasContract} onChange={(value) => setYesNo("hasContract", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("contract", form) ? <UploadField kind="contract" title="Upload kontrakt" detail="PDF, DOCX eller billede · maks. 25 MB" files={form.attachments.contract} error={errorFor("contract")} onAdd={addFiles} onRemove={removeFile} /> : null}
+                <Question title="Hvor mange medarbejdere får adgang til data?"><select className="clean-input" value={form.employeeAccess} onChange={(event) => update("employeeAccess", event.target.value)}><option>0-9</option><option>10-49</option><option>50-99</option><option>100-499</option><option>500-100000</option></select></Question>
+              </>
+            ) : null}
+
+            {step === 6 ? (
+              <>
+                <Question title="45. Milepæle" hint="Angiv de vigtigste kontrolpunkter, adskilt med komma."><input className="clean-input" value={form.milestones.join(", ")} onChange={(event) => update("milestones", splitList(event.target.value))} /></Question>
+                <Question title="48. Ressourcetræk i forbindelse med implementering"><textarea className={cx("clean-input", errorFor("implementationResources") && "invalid")} rows={4} value={form.implementationResources} onChange={(event) => update("implementationResources", event.target.value)} /><FieldErrorText message={errorFor("implementationResources")} /></Question>
+                <div className="two-column-fields">
+                  <Question title="46. Forventet startdato"><input type="date" className={cx("clean-input", errorFor("startDate") && "invalid")} value={form.startDate} onChange={(event) => update("startDate", event.target.value)} /><FieldErrorText message={errorFor("startDate")} /></Question>
+                  <Question title="47. Forventet slutdato"><input type="date" className={cx("clean-input", errorFor("endDate") && "invalid")} value={form.endDate} onChange={(event) => update("endDate", event.target.value)} /><FieldErrorText message={errorFor("endDate")} /></Question>
+                </div>
+                <Question title="49. Antal brugere"><select className={cx("clean-input", errorFor("implementationUsers") && "invalid")} value={form.implementationUsers} onChange={(event) => update("implementationUsers", event.target.value)}><option>0-9</option><option>10-49</option><option>50-99</option><option>100-499</option><option>500-100000</option></select><FieldErrorText message={errorFor("implementationUsers")} /></Question>
+              </>
+            ) : null}
+
+            {step === 7 ? (
+              <>
+                <Question title="50. Er der indhentet arkitekturtegning og beskrivelse af IT-systemets sammenhænge?" hint="Materialet kan fås hos leverandøren."><Choice value={form.hasArchitecture} onChange={(value) => setYesNo("hasArchitecture", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("architecture", form) ? <UploadField kind="architecture" title="Vedhæft arkitekturtegning" detail="Dokumentet knyttes til sagen og kvitteringen" files={form.attachments.architecture} error={errorFor("architecture")} onAdd={addFiles} onRemove={removeFile} icon="paperclip" /> : null}
+                <Question title="Er ‘Tjekliste til leverandør’ udfyldt?"><Choice value={form.hasSupplierChecklist} onChange={(value) => setYesNo("hasSupplierChecklist", value)} options={yesNoOptions} /></Question>
+                {isFieldVisible("supplier-checklist", form) ? <UploadField kind="supplier-checklist" title="Vedhæft tjekliste til leverandør" detail="PDF, DOCX eller billede · maks. 25 MB" files={form.attachments["supplier-checklist"]} onAdd={addFiles} onRemove={removeFile} /> : null}
+                <Question title="51. Er tjeklisten journaliseret i ESDH?"><Choice value={form.checklistJournalized} onChange={(value) => setYesNo("checklistJournalized", value)} options={yesNoOptions} /></Question>
+              </>
+            ) : null}
+
+            {step === 8 ? (
+              <>
+                <Question title="52. Angiv chef" hint="Lederen modtager en godkendelsesmail i Outlook."><select className={cx("clean-input", errorFor("approvingLeader") && "invalid")} value={form.approvingLeader} onChange={(event) => update("approvingLeader", event.target.value)}><option>Peter Bjerre Ahlgren</option><option>Partheepan Vijayamohan</option><option>Anita Mark Vig Lauridsen</option></select><FieldErrorText message={errorFor("approvingLeader")} /></Question>
+                <Question title="53. Har du andre relevante bemærkninger?"><textarea className="clean-input" rows={5} placeholder="Tilføj eventuelle bemærkninger..." value={form.remarks} onChange={(event) => update("remarks", event.target.value)} /></Question>
+                <div className="outlook-note"><Mail size={20} /><div><strong>Godkendelsen klargøres til Outlook</strong><p>Lederen får et versionslåst beslutningsgrundlag og et direkte link til sagen, når mailintegrationen forbindes.</p></div></div>
+              </>
+            ) : null}
+
+            {step === 9 ? <ReviewApplication form={form} error={errorFor("consent")} onEdit={goToStep} onConsent={(checked) => update("consent", checked)} /> : null}
+          </div>
+
+          <div className="sheet-footer">
+            <button className="line-button" type="button" disabled={saveStatus === "saving"} onClick={() => void saveDraft()}>{saveStatus === "saving" ? "Gemmer…" : "Gem kladde"}</button>
+            <div>
+              {step > 0 ? <button className="text-nav-button" type="button" onClick={() => goToStep(step - 1)}><ArrowLeft size={17} /> Forrige</button> : null}
+              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button green" type="button" disabled={saveStatus === "saving"} onClick={() => void submit()}><Send size={17} /> Gem og indsend</button>}
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+const yesNoOptions = [{ value: "ja", label: "Ja" }, { value: "nej", label: "Nej" }];
+
+function saveStatusText(
+  status: "loading" | "idle" | "saving" | "saved" | "error",
+  storageMode: StorageMode,
+) {
+  if (status === "loading") return "Henter seneste kladde…";
+  if (status === "saving") {
+    return storageMode === "local"
+      ? "Gemmer kladde på denne enhed…"
+      : "Gemmer kladde…";
+  }
+  if (status === "saved") {
+    return storageMode === "local"
+      ? "Kladden er gemt på denne enhed"
+      : "Kladden er gemt";
+  }
+  if (status === "error") {
+    return storageMode === "local"
+      ? "Kladde kunne ikke gemmes på denne enhed"
+      : "Kladde kunne ikke hentes eller gemmes";
+  }
+  return storageMode === "local"
+    ? "Klar til at gemme på denne enhed"
+    : "Klar til at gemme";
+}
+
+function shouldUseLocalFallback(error: unknown) {
+  return (
+    error instanceof ServerPersistenceUnavailableError ||
+    error instanceof TypeError
+  );
+}
+
+function replaceAttachment(
+  state: ApplicationFormState,
+  kind: UploadKind,
+  attachmentId: string,
+  replacement: AttachmentDraft,
+): ApplicationFormState {
+  return {
+    ...state,
+    attachments: {
+      ...state.attachments,
+      [kind]: state.attachments[kind].map((attachment) =>
+        attachment.id === attachmentId ? replacement : attachment,
+      ),
+    },
+  };
+}
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function splitList(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function Question({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  const titleId = useId();
+  return <div className="question" role="group" aria-labelledby={titleId}><div className="question-copy"><div className="question-title" id={titleId}>{title}</div>{hint ? <p>{hint}</p> : null}</div><div>{children}</div></div>;
+}
+
+function Choice({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+  return <div className="choice-row" role="radiogroup">{options.map((option) => <button className={value === option.value ? "selected" : ""} type="button" role="radio" aria-checked={value === option.value} key={option.value} onClick={() => onChange(option.value)}><span aria-hidden="true">{value === option.value ? <Check size={14} /> : null}</span>{option.label}</button>)}</div>;
+}
+
+function Money({ id, value, error, onChange }: { id?: string; value: string; error?: string; onChange: (value: string) => void }) {
+  return <><div className="money-field"><span>DKK</span><input id={id} className={error ? "invalid" : undefined} inputMode="decimal" value={value} onChange={(event) => onChange(event.target.value)} /></div><FieldErrorText message={error} /></>;
+}
+
+function CatalogResult({ system, onChoose }: { system: CatalogSystem; onChoose: () => void }) {
+  const status = catalogStatus(system);
+  return <div className="lookup-card catalog-result"><span>{initials(system.name)}</span><div><strong>{system.name}</strong><small>{system.supplier || system.rightsHolder || "Leverandør ikke angivet"}</small><em className={status.local ? "local" : "kitos"}>{status.label}</em></div><button type="button" onClick={onChoose}>Vælg</button></div>;
+}
+
+function CatalogSelection({ system }: { system: SelectedCatalogSystem }) {
+  const status = catalogStatus(system);
+  return <div className="lookup-card catalog-selection"><span>{initials(system.name)}</span><div><strong>{system.name}</strong><small>{system.supplier || system.rightsHolder || "Leverandør ikke angivet"}</small><em className={status.local ? "local" : "kitos"}><Check size={12} /> Valgt · {status.label.toLocaleLowerCase("da-DK")}</em></div></div>;
+}
+
+function catalogStatus(system: Pick<CatalogSystem, "usedInKalundborg" | "localStatus" | "kitosStatus">) {
+  if (system.usedInKalundborg && system.localStatus === "Ikke aktivt") {
+    return { local: true, label: "Registreret i Kalundborg · ikke aktivt" };
+  }
+  if (system.usedInKalundborg && system.kitosStatus === "Ikke tilgængelig") {
+    return { local: true, label: "Bruges i Kalundborg · KITOS ikke tilgængelig" };
+  }
+  if (system.usedInKalundborg) return { local: true, label: "Bruges i Kalundborg" };
+  if (system.kitosStatus === "Ikke tilgængelig") {
+    return { local: false, label: "Kun i KITOS · ikke tilgængelig" };
+  }
+  return { local: false, label: "Kun i KITOS" };
+}
+
+function initials(value: string) {
+  return value.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
+
+function UploadField({ kind, title, detail, files, error, onAdd, onRemove, icon = "upload" }: { kind: UploadKind; title: string; detail: string; files: AttachmentDraft[]; error?: string; onAdd: (kind: UploadKind, event: ChangeEvent<HTMLInputElement>) => void | Promise<void>; onRemove: (kind: UploadKind, id: string) => void | Promise<void>; icon?: "upload" | "paperclip" }) {
+  const Icon = icon === "paperclip" ? Paperclip : Upload;
+  return <div className={cx("upload-group", error && "has-error")}><div className="upload-field"><Icon size={22} /><div><strong>{title}</strong><small>{detail}</small></div><label className="upload-button">Vælg fil<input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={(event) => onAdd(kind, event)} /></label></div>{files.length > 0 ? <div className="upload-list">{files.map((file) => <div className={cx("upload-file", file.status === "failed" && "failed")} key={file.id}><FileStatus file={file} /><button type="button" onClick={() => onRemove(kind, file.id)} aria-label={`Fjern ${file.name}`}><X size={15} /></button></div>)}</div> : null}<FieldErrorText message={error} /></div>;
+}
+
+function FileStatus({ file }: { file: AttachmentDraft }) {
+  const status = file.status === "uploading" ? "uploades…" : file.status === "uploaded" ? "uploadet" : "klar til upload";
+  return <div><strong>{file.name}</strong><small>{file.error || `${formatBytes(file.size)} · ${status}`}</small></div>;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("da-DK", { maximumFractionDigits: 1 })} MB`;
+}
+
+function FormMessage({ tone, title, messages }: { tone: "error" | "warning"; title: string; messages: string[] }) {
+  return <div className={cx("form-message", tone)}><Info size={20} /><div><strong>{title}</strong>{messages.map((message) => <p key={message}>{message}</p>)}</div></div>;
+}
+
+function FieldErrorText({ message }: { message?: string }) {
+  return message ? <p className="field-error" role="alert">{message}</p> : null;
+}
+
+function ReviewApplication({ form, error, onEdit, onConsent }: { form: ApplicationFormState; error?: string; onEdit: (step: number) => void; onConsent: (checked: boolean) => void }) {
+  const rows: Array<[string, string, number]> = [
+    ["System", `${getDisplaySystemName(form)}${form.selectedSystem ? form.selectedSystem.usedInKalundborg ? " · bruges i Kalundborg" : " · fundet i KITOS" : " · manuelt registreret"}`, 0],
+    ["Organisation", form.responsibleOrganization, 1],
+    ["Anskaffelsesform", form.acquisitionMethod, 2],
+    ["Persondata", form.personalData === "ja" ? `Ja · ${form.dataClassification}` : "Nej", 5],
+    ["Samlet finansiering", `${formatDanishAmount(getFinanceTotal(form))} kr.`, 4],
+    ["Implementering", `${formatDate(form.startDate)} – ${formatDate(form.endDate)}`, 6],
+    ["Godkendende chef", form.approvingLeader, 8],
+  ];
+  const warnings: FieldError[] = [getStepWarnings(form, 5), getStepWarnings(form, 7)].flat();
+  return <div className="review-block"><div className="review-status"><CheckCircle2 size={25} /><div><strong>Klar til kontrol</strong><p>Den indsendte version låses. PDF-kvittering og Outlook-mail aktiveres, når backend-integrationerne forbindes.</p></div></div>{warnings.length > 0 ? <FormMessage tone="warning" title="Ansøgningen kan indsendes med opmærksomhedspunkter" messages={warnings.map((warning) => warning.message)} /> : null}{rows.map(([label, value, targetStep]) => <div className="review-line" key={label}><span>{label}</span><strong>{value || "Ikke angivet"}</strong><button type="button" onClick={() => onEdit(targetStep)}>Redigér</button></div>)}<label className="consent-check"><input type="checkbox" checked={form.consent} onChange={(event) => onConsent(event.target.checked)} /><span>{form.consent ? <Check size={14} /> : null}</span>Jeg har kontrolleret oplysningerne og de vedlagte bilag.</label><FieldErrorText message={error} /></div>;
+}
+
+function formatDate(value: string) {
+  if (!value) return "Ikke angivet";
+  return new Intl.DateTimeFormat("da-DK", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+}

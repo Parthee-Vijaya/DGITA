@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Download,
   ExternalLink,
@@ -33,7 +32,6 @@ import {
   Send,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Upload,
   UserCheck,
   UserRound,
@@ -42,6 +40,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { ApplicationFormView } from "../features/application/ApplicationFormView";
 
 type View = "home" | "cases" | "consultant" | "application" | "detail" | "admin";
 type Phase = "Kladde" | "Indsendt" | "Under behandling" | "Afsluttet";
@@ -258,11 +257,11 @@ export default function HomePage() {
           <ConsultantView onOpen={openCase} />
         ) : null}
         {view === "application" ? (
-          <ApplicationView
+          <ApplicationFormView
             onBack={() => navigate("cases")}
             onSubmit={() => {
-              showToast("Ansøgningen er indsendt. Kvittering er sendt til Outlook.");
-              openCase("ITA-001284");
+              showToast("Ansøgningen er versionslåst og indsendt. Outlook-integration afventer forbindelse.");
+              navigate("cases");
             }}
             onToast={showToast}
           />
@@ -573,134 +572,8 @@ function PageIntro({ eyebrow, title, text, children }: { eyebrow: string; title:
   return <div className="page-intro"><div><span className="section-label dark">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div>{children ? <div className="page-intro-action">{children}</div> : null}</div>;
 }
 
-function ApplicationView({ onBack, onSubmit, onToast }: { onBack: () => void; onSubmit: () => void; onToast: (message: string) => void }) {
-  const [step, setStep] = useState(0);
-  const [knownSystem, setKnownSystem] = useState("ja");
-  const [personalData, setPersonalData] = useState("ja");
-
-  return (
-    <div className="application-page page-width">
-      <div className="application-top"><button className="back-text" type="button" onClick={onBack}><ArrowLeft size={18} /> Mine ansøgninger</button><span><Check size={16} /> Kladden er gemt</span></div>
-      <div className="application-title"><div><span className="section-label dark">Ny IT-anskaffelse</span><h1>Opret ansøgning</h1><p>Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs.</p></div><div className="application-progress"><strong>{step + 1}</strong><span>af {applicationSteps.length}</span></div></div>
-
-      <div className="application-layout">
-        <aside className="application-rail">
-          <div className="rail-line" aria-hidden="true" />
-          {applicationSteps.map((label, index) => (
-            <button className={cx(index === step && "active", index < step && "complete")} type="button" key={label} onClick={() => setStep(index)}>
-              <span>{index < step ? <Check size={15} /> : index + 1}</span><strong>{label}</strong>
-            </button>
-          ))}
-          <div className="rail-help"><CircleHelp size={20} /><div><strong>Brug for hjælp?</strong><p>Book et formøde med din lokale konsulent.</p><button type="button" onClick={() => onToast("Formøde er klar til booking")}>Book formøde</button></div></div>
-        </aside>
-
-        <section className="application-sheet">
-          <div className="sheet-heading"><span>Trin {step + 1}</span><h2>{applicationSteps[step]}</h2><p>{stepDescription(step)}</p></div>
-          <div className="sheet-fields">
-            {step === 0 ? <>
-              <Question title="1. Ved du allerede nu hvilket IT-system du vil indkøbe?" hint="Hvis systemet findes i KITOS, kan flere felter udfyldes automatisk."><Choice value={knownSystem} onChange={setKnownSystem} options={["Ja", "Nej"]} /></Question>
-              <Question title="2. Erstatter det et allerede eksisterende IT-system?"><Choice value="nej" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              {knownSystem === "ja" ? <Question title="3. Søg IT-systemnavnet i KITOS" hint="Brug rettighedshaverens officielle navn."><div className="lookup-field"><Search size={18} /><input defaultValue="WSUS klient" /><span><Check size={14} /> Fundet</span></div><div className="lookup-card"><span>WS</span><div><strong>WSUS klient</strong><small>Microsoft · fundet i KITOS</small></div><button type="button">Vælg</button></div></Question> : null}
-              <div className="two-column-fields"><Question title="6. Kontaktperson – navn"><input className="clean-input" defaultValue="atlu@kalundborg.dk" /></Question><Question title="7. Center / afdeling"><input className="clean-input" defaultValue="ORG – Digitalisering og IT" /></Question></div>
-            </> : null}
-            {step === 1 ? <>
-              <div className="source-note"><Sparkles size={19} /><div><strong>Systemoplysninger fra KITOS</strong><p>Kontrollér dataene før du går videre.</p></div></div>
-              <div className="two-column-fields"><Question title="17. Dataejer" hint="Chef eller leder med ansvar for afdelingens data."><input className="clean-input" defaultValue="peah@kalundborg.dk" /></Question><Question title="18. Systemejer"><input className="clean-input" defaultValue="peah@kalundborg.dk" /></Question></div>
-              <div className="two-column-fields"><Question title="19. Kontraktejer"><input className="clean-input" defaultValue="atlu@kalundborg.dk" /></Question><Question title="24. Ansvarlig afdeling / enhed"><input className="clean-input" defaultValue="ORG – Digitalisering og IT" /></Question></div>
-              <Question title="22. Indsæt link til sag i ESDH" hint="Gem kontrakt, korrespondance, tjekliste, arkitekturtegning og risikovurdering på sagen."><input className="clean-input" placeholder="https://esdh.kommune.dk/sag/..." /></Question>
-            </> : null}
-            {step === 2 ? <>
-              <Question title="25. Anskaffelsesform" hint="Anskaffelsesformen har betydning for kravspecifikationens detaljeringsgrad."><select className="clean-input" defaultValue="DIGIT udbud/aftale"><option>DIGIT udbud/aftale</option><option>Direkte tildeling</option><option>Gratis</option><option>KOMBIT/KL/Offentligt projekt</option><option>SKI-aftale</option></select></Question>
-              <Question title="26. Er der gennemført markedsafdækning?" hint="Har du undersøgt, hvilke løsninger der bedst matcher behov, pris og kvalitet?"><Choice value="ja" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <Question title="26.1 Hvilke IT-systemer er afdækket?"><textarea className="clean-input" rows={4} defaultValue="System A, System B" /></Question>
-              <Question title="27. Nyanskaffelse / tilkøb"><Choice value="nyanskaffelse" onChange={() => undefined} options={["Nyanskaffelse", "Tilkøb"]} /></Question>
-            </> : null}
-            {step === 3 ? <>
-              <Question title="28. Formålsbeskrivelse" hint="Hvorfor er anskaffelsen nødvendig? Beskriv effekt og resultater."><textarea className="clean-input" rows={5} defaultValue="Anskaffelsen skal sikre en stabil og ensartet håndtering af klientopdateringer på tværs af kommunen." /></Question>
-              <Question title="29. Funktionsbeskrivelse" hint="Overvej først, om et eksisterende system allerede kan løse opgaven."><textarea className="clean-input" rows={5} defaultValue="Systemet understøtter central distribution, planlægning og dokumentation af opdateringer." /></Question>
-              <Question title="30. Hvilke arbejdsprocesser understøttes?" hint="Angiv relevante KLE-emner."><div className="token-field"><span>Digital drift <button type="button"><X size={13} /></button></span><span>Systemadministration <button type="button"><X size={13} /></button></span><button type="button"><Plus size={15} /> Tilføj KLE-emne</button></div></Question>
-              <Question title="32. Kan andre centre eller teams have gavn af funktionaliteten?"><Choice value="ja" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-            </> : null}
-            {step === 4 ? <>
-              <Question title="33. Er der et eksisterende budget at købe for?"><Choice value="ja" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <div className="finance-overview"><span>Samlet finansiering</span><strong>300,00 kr.</strong><small>Beregnet ud fra felterne nedenfor</small></div>
-              <div className="three-column-fields"><Question title="34. Engangsomkostninger"><Money value="100,00" /></Question><Question title="35. Årlige driftsudgifter"><Money value="100,00" /></Question><Question title="36. Andre omkostninger"><Money value="100,00" /></Question></div>
-              <Question title="38. Beskrivelse af gevinsten"><textarea className="clean-input" rows={4} defaultValue="Mere ensartet drift, færre manuelle opgaver og bedre dokumentation." /></Question>
-            </> : null}
-            {step === 5 ? <>
-              <Question title="Har du allerede lavet en risikovurdering?" hint="Risikovurderingen skal bruges, før ansøgningen kan vurderes."><Choice value="nej" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <Question title="Har du brug for hjælp til risikovurdering?"><Choice value="ja" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <Question title="43. Behandler IT-systemet persondata?"><Choice value={personalData} onChange={setPersonalData} options={["Ja", "Nej"]} /></Question>
-              {personalData === "ja" ? <><Question title="44. Har du allerede en databehandleraftale?"><Choice value="nej" onChange={() => undefined} options={["Ja", "Nej"]} /></Question><Question title="41. Klassifikation af data"><select className="clean-input" defaultValue="3. Fortrolige oplysninger"><option>1. Almindelige personoplysninger</option><option>2. Følsomme personoplysninger</option><option>3. Fortrolige oplysninger</option><option>4. CPR data</option></select></Question></> : null}
-              <div className="upload-field"><Upload size={22} /><div><strong>Upload risikovurdering</strong><small>PDF, DOCX eller XLSX · maks. 25 MB</small></div><button type="button">Vælg fil</button></div>
-            </> : null}
-            {step === 6 ? <>
-              <Question title="45. Milepæle" hint="Vælg de vigtige kontrolpunkter i forløbet."><div className="token-field green"><span><Check size={14} /> Kontraktindgåelse</span><span><Check size={14} /> Test</span><button type="button"><Plus size={15} /> Tilføj</button></div></Question>
-              <Question title="48. Ressourcetræk i forbindelse med implementering"><textarea className="clean-input" rows={4} defaultValue="Projektledelse, teknisk opsætning, test, brugerstyring og uddannelse." /></Question>
-              <div className="two-column-fields"><Question title="46. Forventet startdato"><input type="date" className="clean-input" defaultValue="2026-09-18" /></Question><Question title="47. Forventet slutdato"><input type="date" className="clean-input" defaultValue="2026-10-09" /></Question></div>
-              <Question title="49. Antal brugere"><select className="clean-input" defaultValue="500-100000"><option>0-9</option><option>10-49</option><option>50-99</option><option>100-499</option><option>500-100000</option></select></Question>
-            </> : null}
-            {step === 7 ? <>
-              <div className="requirement-alert"><Info size={20} /><div><strong>Én oplysning mangler</strong><p>Arkitekturtegningen er nødvendig, før sagen kan færdigbehandles.</p></div></div>
-              <Question title="50. Er der indhentet arkitekturtegning og beskrivelse af IT-systemets sammenhænge?" hint="Materialet kan fås hos leverandøren."><Choice value="nej" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <Question title="51. Er bilaget ‘Tjekliste til leverandør’ udfyldt og journaliseret i ESDH?"><Choice value="ja" onChange={() => undefined} options={["Ja", "Nej"]} /></Question>
-              <div className="upload-field"><Paperclip size={22} /><div><strong>Vedhæft arkitekturtegning</strong><small>Dokumentet knyttes til sagen og kvitteringen</small></div><button type="button">Vælg fil</button></div>
-            </> : null}
-            {step === 8 ? <>
-              <Question title="52. Angiv chef" hint="Lederen modtager en godkendelsesmail i Outlook."><div className="selected-person"><span>PB</span><div><strong>Peter Bjerre Ahlgren</strong><small>Godkendende leder</small></div><button type="button">Skift</button></div></Question>
-              <Question title="53. Har du andre relevante bemærkninger?"><textarea className="clean-input" rows={5} placeholder="Tilføj eventuelle bemærkninger..." /></Question>
-              <div className="outlook-note"><Mail size={20} /><div><strong>Godkendelsen sendes via Outlook</strong><p>Lederen får et versionslåst beslutningsgrundlag og et direkte link til sagen.</p></div></div>
-            </> : null}
-            {step === 9 ? <ReviewApplication /> : null}
-          </div>
-          <div className="sheet-footer">
-            <button className="line-button" type="button" onClick={() => onToast("Kladden er gemt")}>Gem kladde</button>
-            <div>{step > 0 ? <button className="text-nav-button" type="button" onClick={() => setStep(step - 1)}><ArrowLeft size={17} /> Forrige</button> : null}{step < applicationSteps.length - 1 ? <button className="solid-button" type="button" onClick={() => setStep(step + 1)}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button green" type="button" onClick={onSubmit}><Send size={17} /> Gem og indsend</button>}</div>
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function stepDescription(step: number) {
-  return [
-    "Vi starter med at afklare systemet, kontaktpersonen og organisationen.",
-    "Angiv ansvar for data, system, kontrakt og den tilhørende ESDH-sag.",
-    "Beskriv hvordan systemet anskaffes, og hvordan markedet er undersøgt.",
-    "Gør det tydeligt, hvilken forandring og værdi systemet skal skabe.",
-    "Saml omkostninger, budget og forventede gevinster.",
-    "Vurdér risiko, persondata og behovet for en databehandleraftale.",
-    "Planlæg milepæle, ressourcer, datoer og antal brugere.",
-    "Dokumentér arkitektur, leverandørkrav og systemets sammenhænge.",
-    "Vælg den godkendende chef, og tilføj eventuelle bemærkninger.",
-    "Kontrollér oplysningerne, før ansøgningen låses og sendes.",
-  ][step];
-}
-
 function Question({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return <div className="question"><div className="question-copy"><label>{title}</label>{hint ? <p>{hint}</p> : null}</div>{children}</div>;
-}
-
-function Choice({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[] }) {
-  return <div className="choice-row">{options.map((option) => { const id = option.toLowerCase(); return <button className={value === id ? "selected" : ""} type="button" key={option} onClick={() => onChange(id)}><span>{value === id ? <Check size={14} /> : null}</span>{option}</button>; })}</div>;
-}
-
-function Money({ value }: { value: string }) {
-  return <div className="money-field"><span>DKK</span><input defaultValue={value} /></div>;
-}
-
-function ReviewApplication() {
-  const rows = [
-    ["System", "WSUS klient · fundet i KITOS"],
-    ["Organisation", "ORG – Digitalisering og IT"],
-    ["Anskaffelsesform", "DIGIT udbud/aftale"],
-    ["Persondata", "Ja · fortrolige oplysninger"],
-    ["Samlet finansiering", "300,00 kr."],
-    ["Implementering", "18. september – 9. oktober 2026"],
-    ["Godkendende chef", "Peter Bjerre Ahlgren"],
-  ];
-  return <div className="review-block"><div className="review-status"><CheckCircle2 size={25} /><div><strong>Klar til indsendelse</strong><p>Der oprettes en versionslåst PDF-kvittering, som sendes til din Outlook.</p></div></div>{rows.map(([label, value]) => <div className="review-line" key={label}><span>{label}</span><strong>{value}</strong><button type="button">Redigér</button></div>)}<label className="consent-check"><input type="checkbox" defaultChecked /><span><Check size={14} /></span>Jeg har kontrolleret oplysningerne og de vedlagte bilag.</label></div>;
 }
 
 function CaseDetail({ item, onBack, onToast }: { item: CaseRecord; onBack: () => void; onToast: (message: string) => void }) {

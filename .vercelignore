@@ -1,0 +1,14 @@
+.git
+.next
+.vinext
+.wrangler
+.vercel
+coverage
+dist
+node_modules
+outputs
+work
+*.tsbuildinfo
+.env*
+!.env.example
+features/notifications/use-notifications 2.ts

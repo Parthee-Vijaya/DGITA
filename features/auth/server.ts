@@ -9,9 +9,9 @@ import {
 import { AuthHttpError } from "./http";
 import {
   createSessionToken,
+  devLoginPolicy,
   hashSessionToken,
   initialsFor,
-  isDevLoginEnabled,
   readSessionToken,
   sessionCookie,
   SESSION_TTL_SECONDS,
@@ -22,6 +22,7 @@ import {
   type AuthProvider,
   type ServerActor,
 } from "./types";
+import { assertDemoLoginAccess } from "./demo-access";
 
 type ActorRow = {
   user_id: string;
@@ -142,15 +143,25 @@ export async function createDevSession(
   request: Request,
   role: WorkspaceRole,
   environment?: AuthEnvironment,
+  accessCode?: string,
 ): Promise<CreatedSession> {
   const runtimeEnvironment = environment ?? (await getAuthEnvironment());
-  if (!isDevLoginEnabled(request.url, runtimeEnvironment)) {
-    throw new AuthHttpError(
-      403,
-      "DEV_LOGIN_DISABLED",
-      "Testlogin er ikke aktiveret i dette miljø.",
-    );
+  const policy = devLoginPolicy(request.url, runtimeEnvironment);
+  let currentProvider: AuthProvider | null = null;
+  if (
+    policy.enabled &&
+    policy.accessCodeRequired &&
+    readSessionToken(request.headers.get("cookie"))
+  ) {
+    const currentActor = await getActor(request);
+    currentProvider = currentActor?.provider ?? null;
   }
+  await assertDemoLoginAccess(
+    request.url,
+    runtimeEnvironment,
+    accessCode,
+    currentProvider,
+  );
 
   await ensurePortalSchema();
   const { DB } = await getPersistenceBindings();

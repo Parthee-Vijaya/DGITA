@@ -5,6 +5,7 @@ import { AuthHttpError, assertSameOrigin, noStoreJson } from "./http.ts";
 import {
   SESSION_COOKIE_NAME,
   createSessionToken,
+  devLoginPolicy,
   expiredSessionCookie,
   hashSessionToken,
   initialsFor,
@@ -13,6 +14,7 @@ import {
   parseCookie,
   readSessionToken,
   sessionCookie,
+  verifyDemoAccessCode,
 } from "./primitives.ts";
 import { readOidcProviderConfig } from "./providers.ts";
 
@@ -53,6 +55,13 @@ test("testlogin er kun aktivt lokalt eller med eksplicit flag", () => {
     isDevLoginEnabled("https://portal.example.dk", {
       DGITA_ENABLE_DEV_LOGIN: "true",
     }),
+    false,
+  );
+  assert.equal(
+    isDevLoginEnabled("https://portal.example.dk", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_DEMO_ACCESS_SECRET: "x".repeat(32),
+    }),
     true,
   );
   assert.equal(
@@ -61,6 +70,46 @@ test("testlogin er kun aktivt lokalt eller med eksplicit flag", () => {
     }),
     false,
   );
+});
+
+test("offentlig demo kræver en konfigureret adgangskode", async () => {
+  assert.deepEqual(devLoginPolicy("http://localhost:3000", {}), {
+    enabled: true,
+    accessCodeRequired: false,
+    configurationValid: true,
+  });
+  assert.deepEqual(
+    devLoginPolicy("https://portal.example.dk", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_DEMO_ACCESS_SECRET: "for-kort",
+    }),
+    {
+      enabled: false,
+      accessCodeRequired: true,
+      configurationValid: false,
+    },
+  );
+  assert.equal(
+    devLoginPolicy("https://portal.example.dk", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_DEMO_ACCESS_SECRET: " ".repeat(32),
+    }).configurationValid,
+    false,
+  );
+
+  const environment = {
+    DGITA_ENABLE_DEV_LOGIN: "true",
+    DGITA_DEMO_ACCESS_SECRET: "demo-access-secret-with-32-characters",
+  };
+  assert.equal(
+    await verifyDemoAccessCode(
+      "demo-access-secret-with-32-characters",
+      environment,
+    ),
+    true,
+  );
+  assert.equal(await verifyDemoAccessCode("forkert", environment), false);
+  assert.equal(await verifyDemoAccessCode(undefined, environment), false);
 });
 
 test("kun de tre aftalte demo-roller accepteres", () => {
@@ -92,6 +141,38 @@ test("state-changing requests kræver samme Origin", () => {
       ),
     (error) =>
       error instanceof AuthHttpError && error.code === "ORIGIN_MISMATCH",
+  );
+
+  assert.doesNotThrow(() =>
+    assertSameOrigin(
+      new Request("https://dgita-release-abc.vercel.app/api/auth/logout", {
+        method: "POST",
+        headers: {
+          Origin: "https://dgita-release-abc.vercel.app",
+          "Sec-Fetch-Site": "same-origin",
+        },
+      }),
+      {
+        DGITA_APP_ORIGIN: "https://dgita-nine.vercel.app",
+        VERCEL_URL: "dgita-release-abc.vercel.app",
+      },
+    ),
+  );
+
+  assert.throws(
+    () =>
+      assertSameOrigin(
+        new Request("https://portal.example.dk/api/auth/logout", {
+          method: "POST",
+          headers: { Origin: "https://portal.example.dk" },
+        }),
+        {
+          DGITA_APP_ORIGIN: "https://portal.example.dk",
+          VERCEL_URL: "attacker.example",
+        },
+      ),
+    (error) =>
+      error instanceof AuthHttpError && error.code === "AUTH_CONFIGURATION_ERROR",
   );
 });
 

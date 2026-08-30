@@ -38,8 +38,10 @@ export type SessionResponse =
       authenticated: true;
       viewer: Actor;
       devLoginEnabled: boolean;
+      devLoginAccessCodeRequired: boolean;
     }
   | {
       authenticated: false;
       devLoginEnabled: boolean;
+      devLoginAccessCodeRequired: boolean;
     };

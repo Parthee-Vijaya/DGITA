@@ -10,7 +10,7 @@ Demonstrationssager, roller og personer er test-fixtures. Kontaktoplysninger fra
 
 | Område | Status |
 | --- | --- |
-| Formular, kladder og bilag | Implementeret med D1/R2-persistens |
+| Formular, kladder og bilag | Implementeret med D1/R2 lokalt/Cloudflare og Turso/privat Blob på Vercel |
 | Roller og adgangskontrol | Bruger, D-GITA-konsulent og Admin |
 | Lederens godkendelsesflow | Versionsbundet link med 7 dages beslutningsfrist og én irreversibel beslutning |
 | Rettelse og genindsendelse | Ny låst version N+1 med CAS-konfliktbeskyttelse |
@@ -18,7 +18,7 @@ Demonstrationssager, roller og personer er test-fixtures. Kontaktoplysninger fra
 | Outlook-mail | Graph-adapter og idempotent outbox implementeret; kræver tenant-konfiguration |
 | Admin og visuel editor | Redaktionelt indhold, FAQ, links, hjælp og tre billedplaceringer |
 | SSO | Sessions- og providergrundlag findes; Entra/FK-loginflow mangler ekstern implementering |
-| Primær driftsmodel | Cloudflare Worker/Sites med D1 og R2 |
+| Driftsmodeller | Cloudflare Worker/Sites med D1/R2 eller Vercel med Turso/privat Blob |
 
 ## Brugeroplevelsen
 
@@ -92,23 +92,27 @@ Kvitteringer genereres som PDF fra den låste version:
 - `approval` efter lederens godkendelse
 - `final` ved D-GITA-afslutning
 
-PDF-bytes gemmes privat i R2 med checksum. Mailkøen bruger idempotens, statusserne `queued`, `processing`, `sent`, `failed` og `cancelled` samt højst fem kontrollerede forsøg.
+PDF-bytes gemmes i det private objektlager med checksum. Mailkøen bruger idempotens, statusserne `queued`, `processing`, `sent`, `failed` og `cancelled` samt højst fem kontrollerede forsøg.
 
 ## Arkitektur
 
 ```mermaid
 flowchart TB
-    Browser["Browser · React 19"] --> App["Next.js 16 App Router · Vinext"]
+    Browser["Browser · React 19"] --> App["Next.js 16 App Router"]
     App --> Auth["Server-side session, rolle, tenant og ejercheck"]
-    Auth --> D1["Cloudflare D1 · autoritativ SQL-data"]
-    Auth --> R2["Cloudflare R2 · private bilag, billeder og PDF'er"]
+    Auth --> Persistence["Fælles persistence-kontrakt"]
+    Persistence --> D1["Cloudflare D1 · SQL"]
+    Persistence --> Turso["Turso/libSQL · SQL på Vercel"]
+    Persistence --> R2["Cloudflare R2 · private filer"]
+    Persistence --> Blob["Vercel Blob · private filer"]
     App --> Catalog["Committed KITOS/Kalundborg-katalog"]
-    Cron["Worker cron · hvert 2. minut"] --> Outbox["Idempotent mail-outbox i D1"]
+    WorkerCron["Cloudflare Worker-cron · hvert 2. minut"] --> Outbox["Idempotent mail-outbox"]
+    VercelCron["Vercel Hobby-cron · dagligt"] --> Outbox
     Admin["Admin · manuel behandling"] --> Outbox
     Outbox --> Graph["Microsoft Graph · Outlook"]
 ```
 
-Teknologistakken er Next.js 16, React 19, TypeScript 5, Vinext/Vite, Cloudflare Worker, D1, R2, Drizzle og `pdf-lib`. Der findes ingen LocalStorage- eller in-memory-fallback for forretningsdata: manglende D1/R2 får løsningen til at fejle lukket.
+Teknologistakken er Next.js 16, React 19, TypeScript 5, Vinext/Vite, Cloudflare Worker, D1, R2, Turso/libSQL, privat Vercel Blob, Drizzle og `pdf-lib`. Den samme forretningslogik bruger en D1-kompatibel SQL-kontrakt på begge platforme. Der findes ingen LocalStorage- eller in-memory-fallback for forretningsdata: manglende storage-konfiguration får løsningen til at fejle lukket.
 
 Datamodellen dækker tenants, brugere, roller, sessions, ansøgninger, uforanderlige versioner, bilag, indhold, billeder, D-GITA-vurderinger, kommentarer, audit, notifikationer, kvitteringer, mail-outbox og ledergodkendelser. SQL-triggers beskytter indsendte versioner, versionsbundne bilag og auditposter mod ændring.
 
@@ -118,7 +122,7 @@ Datamodellen dækker tenants, brugere, roller, sessions, ansøgninger, uforander
 - En almindelig bruger kan kun læse ansøgninger, hvor `owner_user_id` matcher den interne bruger, som serveren har opløst fra identity providerens stabile subject.
 - Konsulent og Admin er kommuneafgrænset og ser aldrig en anden tenants sager.
 - Mutationer kræver samme origin.
-- Sessionstoken gemmes hashet i D1; cookien er `HttpOnly`, `SameSite=Lax` og `Secure` på HTTPS og udløber efter 12 timer.
+- Sessionstoken gemmes hashet i den autoritative SQL-database; cookien er `HttpOnly`, `SameSite=Lax` og `Secure` på HTTPS og udløber efter 12 timer.
 - Offentlige godkendelsessider bruger `no-store`, `noindex`, frame-beskyttelse og `no-referrer`.
 - Interne kommentarer og D-GITA-felter findes ikke i brugerens API-projektion eller PDF-kvittering.
 - Secrets og Graph access tokens sendes aldrig til browseren.
@@ -155,6 +159,37 @@ npm run test:e2e
 
 Den komplette, secret-frie skabelon findes i [`.env.example`](.env.example).
 
+### Vercel-storage, offentlige adresser og testlogin
+
+En funktionel Vercel-deployment kræver disse storage-variabler:
+
+```dotenv
+TURSO_DATABASE_URL=libsql://<database>-<organisation>.turso.io
+TURSO_AUTH_TOKEN=<database-token>
+BLOB_STORE_ID=<private-blob-store-id>
+NEXT_PUBLIC_DGITA_UPLOAD_MODE=vercel-blob
+```
+
+Blob-store skal være **privat**. Uploadtilstanden sender ansøgningsbilag direkte fra browseren til en kortlivet, signeret Blob-URL og bevarer dermed formularens grænse på 25 MB. Completion-kaldet sender kun metadata og verificerer den private Blob server-side. Downloads bruger tilsvarende et kortlivet, signeret redirect. Cloudflare anvender fortsat sit multipart-/streamingflow, hvor `NEXT_PUBLIC_DGITA_UPLOAD_MODE` udelades.
+
+Uden alle tre storage-værdier findes der ingen browserbaseret fallback; login og datafunktioner fejler i stedet lukket. Konfigurér desuden deploymentens kanoniske HTTPS-adresse og separate tilfældige secrets:
+
+```dotenv
+DGITA_APP_ORIGIN=https://<produktion-alias>
+NEXT_PUBLIC_SITE_URL=https://<produktion-alias>
+DGITA_APPROVAL_TOKEN_SECRET=<mindst-32-tilfældige-tegn>
+CRON_SECRET=<mindst-32-tilfældige-tegn>
+```
+
+`DGITA_ENABLE_DEV_LOGIN=true` aktiverer de fiktive testidentiteter og rolle-dropdownen. På andre værter end localhost skal der samtidig konfigureres en tilfældig `DGITA_DEMO_ACCESS_SECRET` på mindst 32 tegn. Første testlogin kræver denne adgangskode, mens en allerede godkendt dev-session fortsat kan skifte testrolle uden at indtaste den igen. Mangler secret'en, eller er den for kort, fejler testlogin lukket.
+
+```dotenv
+DGITA_ENABLE_DEV_LOGIN=true
+DGITA_DEMO_ACCESS_SECRET=<mindst-32-tilfældige-tegn>
+```
+
+Demo-adgangskoden erstatter ikke rigtig identitetskontrol. En sådan deployment må derfor kun indeholde fiktive data og må ikke bruges som kommunal produktion. Sæt `DGITA_ENABLE_DEV_LOGIN=false` før brug med rigtige data og erstat flowet med Entra ID eller Fælleskommunal Adgangsstyring.
+
 ### Microsoft Graph / Outlook
 
 Følgende variabler kræves for reel mailafsendelse:
@@ -176,12 +211,16 @@ Providerkonfiguration, sessionsmodel og rollemodel er klar til integration. Det 
 
 ## Database og migrationer
 
-Bindings er deklareret i `.openai/hosting.json`:
+Cloudflare-bindings er deklareret i `.openai/hosting.json`:
 
 - D1: `DB`
 - R2: `FILES`
 
-Drizzle-migrationerne i `drizzle/` er deployment-kilden. Runtime-bootstrap er idempotent og gør en frisk lokal/Sites-database klar uden browserlagring. Buildet pakker migrationsfilerne under `dist/.openai/drizzle`.
+På Vercel leveres den samme SQLite-kompatible databasekontrakt af Turso/libSQL, mens bilag, portalbilleder og PDF-kvitteringer lagres i privat Vercel Blob. `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` og `BLOB_STORE_ID` skal høre til det samme Vercel-projekt og det relevante deploymentmiljø. Blob SDK henter det kortlivede OIDC-token fra Vercels request-context, så der ikke kræves et langtidslevende read/write-token. `BLOB_READ_WRITE_TOKEN` understøttes fortsat som en kontrolleret fallback uden for OIDC-miljøet.
+
+Drizzle-migrationerne i `drizzle/` er deployment-kilden. Runtime-bootstrap er idempotent og gør en frisk database klar uden browserlagring. Cloudflare-buildet pakker desuden migrationsfilerne under `dist/.openai/drizzle`.
+
+En frisk demo-database seedes deterministisk med de fiktive brugere, de ti demonstrationssager, redaktionelt testindhold og de tilhørende workflowdata. Systemkatalogets 4.656 poster ligger som committed runtime-data. Den lokale udviklingsdatabase og E2E-rester kopieres ikke til drift.
 
 Det normaliserede systemkatalog ligger i `features/catalog/data/system-catalog.json` og er committed, så drift ikke afhænger af de lokale Excel-filer.
 
@@ -198,7 +237,8 @@ npm audit --omit=dev
 Den seneste komplette lokale gennemgang består af:
 
 - produktionsbuild gennem Vinext/Vite
-- 90 enheds- og integrationstests
+- native Next.js/Vercel-produktionsbuild
+- 119 beståede enheds- og integrationstests
 - 75 E2E-kontroller af HTTP/API → D1/R2 → PDF/mail-outbox
 - SQLite `integrity_check` og `foreign_key_check`
 - manuel browsertest af login, roller, ejerskab, formularregler, fuzzy-søgning, D-GITA-felter, admin-editor og tutorial
@@ -208,16 +248,28 @@ Et fuldt `npm audit` rapporterer fire moderate, udviklings-only fund i `drizzle-
 
 ## Deployment
 
-Den funktionelle driftsmodel er Cloudflare Worker/Sites med D1 og R2. Projektet indeholder den nødvendige worker-entry, bindings, cron og migrationspakning, men `.openai/hosting.json` er endnu ikke koblet til et konkret Sites-projekt-id.
+Projektet har to persistence-mål:
 
-Et Vercel-preview er ikke en komplet driftsudgave af denne arkitektur, fordi de forventede `cloudflare:workers`-, D1- og R2-bindings ikke findes dér uden en særskilt persistence-adapter.
+- **Cloudflare:** Vinext Worker/Sites med D1, privat R2 og Worker-cron. Projektet indeholder worker-entry, bindings og migrationspakning, men `.openai/hosting.json` er endnu ikke koblet til et konkret Sites-projekt-id.
+- **Vercel:** Native Next.js-build med Turso/libSQL og privat Vercel Blob. Turso-variablerne, `BLOB_STORE_ID`, portal-origin og secrets ovenfor er obligatoriske; Blob SDK bruger Vercels kortlivede request-context OIDC-token.
+
+`vercel.json` registrerer `GET /api/cron/mail` kl. 06:00 UTC én gang dagligt, som er kompatibelt med Hobby-planen. Vercel sender `CRON_SECRET` som et Bearer-token; endpointet afviser både manglende konfiguration og alle ikke-eksakte tokens. Cronjobbet behandler mailkøen og rydder sikkert op i udløbne upload-verifikationer. Cronjobs kører kun på production deployments. Ved hastesager kan en Admin fortsat vælge **Behandl kø** i mailadministrationen. Både cron og manuel mailbehandling kræver en færdig Microsoft Graph-konfiguration for at kunne sende.
+
+Til demo med testdata anvendes `DGITA_ENABLE_DEV_LOGIN=true` sammen med en separat `DGITA_DEMO_ACCESS_SECRET` på mindst 32 tegn. Kontrollér før deployment, at alle data fortsat er fiktive, og at miljøvariablerne er oprettet i det korrekte Vercel-miljø. En senere kommunal produktion skal bruge rigtigt SSO og `DGITA_ENABLE_DEV_LOGIN=false`.
+
+Det direkte Vercel-upload undgår Functions' requestgrænse, og signerede download-redirects undgår responsegrænsen. Hver completion tager en 15-minutters CAS-lease, og kun den worker, der ejer leasen, kan færdigmelde eller kassere Blob'en. En mistet databasekvittering efter ready-commit medfører aldrig automatisk Blob-sletning. Udløbne `verifying`-rækker lægges i en holdbar slettekø, hvor Blob-sletning kvitteres separat og derfor kan gentages sikkert.
+
+Der kan højst være 10 ufærdige eller karantænesatte direkte uploads pr. sag og 30 pr. bruger. En `pending` reservation uden en serververificeret, præcis Blob-URL sættes efter en time i `quarantined` og tæller fortsat i kvoten. Vercel kan give direkte private uploads en opaque faktisk URL; derfor frigives sådan en reservation ikke automatisk ud fra det logiske filnavn, da det ellers ville tillade ubegrænsede orphan-Blobs. De signerede URL'er er kortlivede. Adminbilleder er begrænset til 3 MB, og mindre kvitteringer kan fortsat passere serverfunktionen.
 
 ## Kendte eksterne grænser
 
 Dette er bevidst ikke fremstillet som færdig kommunal produktion:
 
 - Entra/FK-loginflow og claim-mapping mangler som beskrevet ovenfor.
+- Det adgangskodebeskyttede testlogin må kun bruges med fiktive data; det er ikke en produktionsidentitet eller en erstatning for SSO.
 - Graph kræver kommunens appregistrering, tilladelser, afsenderpostkasse og secrets.
+- Vercel Hobby behandler automatisk mailkøen højst én gang dagligt; Admin kan behandle den manuelt imellem kørslerne.
+- Et afbrudt direkte Blob-upload uden completion-callback kan ende i en kvotebindende `quarantined`-række. En senere driftsudgave bør supplere med Blob-list-reconciliation eller en administrativ frigivelsesfunktion.
 - Uploadflowet har endnu ingen malware-scanner; `scan_status` sættes til `not_configured`.
 - Retention- og automatisk slettepolitik er ikke implementeret.
 - ESDH-links og journaliseringsflag findes, men automatisk ESDH-arkivering er ikke forbundet.

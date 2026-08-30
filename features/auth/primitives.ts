@@ -2,6 +2,7 @@ import type { WorkspaceRole } from "../workspace/model";
 
 export const SESSION_COOKIE_NAME = "dgita_session";
 export const SESSION_TTL_SECONDS = 12 * 60 * 60;
+export const MIN_DEMO_ACCESS_SECRET_LENGTH = 32;
 const AUTH_ROLES = ["user", "consultant", "admin"] as const;
 
 export type AuthEnvironment = Record<string, string | undefined>;
@@ -98,12 +99,85 @@ export function isDevLoginEnabled(
   requestUrl: string | URL,
   environment: AuthEnvironment = {},
 ) {
-  if (environment.DGITA_ENABLE_DEV_LOGIN?.toLowerCase() === "true") {
-    return true;
+  const policy = devLoginPolicy(requestUrl, environment);
+  return policy.enabled;
+}
+
+export function devLoginPolicy(
+  requestUrl: string | URL,
+  environment: AuthEnvironment = {},
+) {
+  if (isLocalRequestUrl(requestUrl)) {
+    return {
+      enabled: true,
+      accessCodeRequired: false,
+      configurationValid: true,
+    } as const;
   }
 
+  const explicitlyEnabled =
+    environment.DGITA_ENABLE_DEV_LOGIN?.toLowerCase() === "true";
+  if (!explicitlyEnabled) {
+    return {
+      enabled: false,
+      accessCodeRequired: false,
+      configurationValid: true,
+    } as const;
+  }
+
+  const configurationValid = hasValidDemoAccessSecret(environment);
+  return {
+    enabled: configurationValid,
+    accessCodeRequired: true,
+    configurationValid,
+  } as const;
+}
+
+export function hasValidDemoAccessSecret(
+  environment: AuthEnvironment = {},
+) {
+  const secret = environment.DGITA_DEMO_ACCESS_SECRET;
+  return (
+    typeof secret === "string" &&
+    secret.length >= MIN_DEMO_ACCESS_SECRET_LENGTH &&
+    secret.trim() === secret
+  );
+}
+
+export async function verifyDemoAccessCode(
+  accessCode: string | undefined,
+  environment: AuthEnvironment = {},
+) {
+  const expected = environment.DGITA_DEMO_ACCESS_SECRET ?? "";
+  const supplied = accessCode ?? "";
+  const [expectedDigest, suppliedDigest] = await Promise.all([
+    sha256Bytes(expected),
+    sha256Bytes(supplied),
+  ]);
+
+  let difference = 0;
+  for (let index = 0; index < expectedDigest.length; index += 1) {
+    difference |= expectedDigest[index] ^ suppliedDigest[index];
+  }
+
+  return hasValidDemoAccessSecret(environment) && difference === 0;
+}
+
+function isLocalRequestUrl(requestUrl: string | URL) {
   const hostname = new URL(requestUrl).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]"
+  );
+}
+
+async function sha256Bytes(value: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return new Uint8Array(digest);
 }
 
 export function initialsFor(displayName: string) {

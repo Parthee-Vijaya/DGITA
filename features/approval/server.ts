@@ -98,6 +98,14 @@ export type PublicApprovalAttachment = {
   checksum: string;
 };
 
+export type PublicApprovalAttachmentAccess = {
+  filename: string;
+  contentType: string;
+  checksum: string;
+  size: number;
+  storageKey: string;
+};
+
 export class ApprovalWorkflowError extends Error {
   constructor(
     readonly status: 400 | 403 | 404 | 409 | 410 | 422 | 503,
@@ -433,6 +441,31 @@ export async function getPublicApprovalAttachment(
   token: string,
   attachmentId: string,
 ): Promise<PublicApprovalAttachment> {
+  const attachment = await authorizePublicApprovalAttachment(token, attachmentId);
+  const { FILES } = await getPersistenceBindings();
+  const object = await FILES.get(attachment.storageKey);
+  if (!object) throw invalidLink();
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const checksum = await sha256Bytes(bytes);
+  if (bytes.byteLength !== attachment.size || checksum !== attachment.checksum) {
+    throw new ApprovalWorkflowError(
+      409,
+      "APPROVAL_ATTACHMENT_INTEGRITY",
+      "Bilaget kunne ikke integritetskontrolleres.",
+    );
+  }
+  return {
+    bytes,
+    filename: attachment.filename,
+    contentType: attachment.contentType,
+    checksum,
+  };
+}
+
+export async function authorizePublicApprovalAttachment(
+  token: string,
+  attachmentId: string,
+): Promise<PublicApprovalAttachmentAccess> {
   if (!/^[0-9a-f-]{36}$/iu.test(attachmentId)) throw invalidLink();
   const tokenHash = await validTokenHash(token);
   const DB = await preparePortalData();
@@ -460,23 +493,12 @@ export async function getPublicApprovalAttachment(
     size_bytes: number;
   }>();
   if (!attachment) throw invalidLink();
-  const { FILES } = await getPersistenceBindings();
-  const object = await FILES.get(attachment.storage_key);
-  if (!object) throw invalidLink();
-  const bytes = new Uint8Array(await object.arrayBuffer());
-  const checksum = await sha256Bytes(bytes);
-  if (bytes.byteLength !== attachment.size_bytes || checksum !== attachment.checksum_sha256) {
-    throw new ApprovalWorkflowError(
-      409,
-      "APPROVAL_ATTACHMENT_INTEGRITY",
-      "Bilaget kunne ikke integritetskontrolleres.",
-    );
-  }
   return {
-    bytes,
     filename: attachment.original_name,
     contentType: attachment.content_type,
-    checksum,
+    checksum: attachment.checksum_sha256,
+    size: attachment.size_bytes,
+    storageKey: attachment.storage_key,
   };
 }
 

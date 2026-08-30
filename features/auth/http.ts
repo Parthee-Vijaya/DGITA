@@ -31,10 +31,9 @@ export function assertSameOrigin(
     );
   }
 
-  const configuredOrigin = environment.DGITA_APP_ORIGIN;
-  let expectedOrigin: string;
+  let expectedOrigins: Set<string>;
   try {
-    expectedOrigin = new URL(configuredOrigin || request.url).origin;
+    expectedOrigins = allowedOrigins(request, environment);
   } catch {
     throw new AuthHttpError(
       500,
@@ -50,7 +49,7 @@ export function assertSameOrigin(
     throw new AuthHttpError(403, "INVALID_ORIGIN", "Oprindelsen er ugyldig.");
   }
 
-  if (normalizedOrigin !== expectedOrigin) {
+  if (!expectedOrigins.has(normalizedOrigin)) {
     throw new AuthHttpError(
       403,
       "ORIGIN_MISMATCH",
@@ -66,6 +65,27 @@ export function assertSameOrigin(
       "Anmodningen blev afvist af portalens sikkerhedskontrol.",
     );
   }
+}
+
+function allowedOrigins(request: Request, environment: AuthEnvironment) {
+  const configuredOrigin = environment.DGITA_APP_ORIGIN;
+  const origins = new Set([
+    new URL(configuredOrigin || request.url).origin,
+  ]);
+
+  // Vercel exposes the immutable deployment hostname at runtime. Trusting that
+  // exact platform-provided hostname lets an unaliased release be tested before
+  // promotion while the canonical production origin remains locked down.
+  for (const key of ["VERCEL_URL", "VERCEL_BRANCH_URL"] as const) {
+    const hostname = environment[key]?.trim().toLowerCase();
+    if (!hostname) continue;
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.vercel\.app$/u.test(hostname)) {
+      throw new Error(`Invalid ${key}`);
+    }
+    origins.add(`https://${hostname}`);
+  }
+
+  return origins;
 }
 
 export function noStoreJson(data: unknown, init: ResponseInit = {}) {

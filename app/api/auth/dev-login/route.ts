@@ -36,8 +36,24 @@ export async function POST(request: Request) {
         "Vælg en gyldig testrolle.",
       );
     }
+    const accessCode =
+      body && typeof body === "object" && "accessCode" in body
+        ? (body as { accessCode?: unknown }).accessCode
+        : undefined;
+    if (accessCode !== undefined && typeof accessCode !== "string") {
+      throw new AuthHttpError(
+        400,
+        "INVALID_DEMO_ACCESS_CODE",
+        "Demo-adgangskoden skal være tekst.",
+      );
+    }
 
-    const session = await createDevSession(request, role, environment);
+    const session = await createDevSession(
+      request,
+      role,
+      environment,
+      accessCode,
+    );
     return noStoreJson(
       { authenticated: true, viewer: publicActor(session.actor) },
       { headers: { "Set-Cookie": session.cookie } },

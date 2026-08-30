@@ -53,8 +53,16 @@ export async function listCaseAttachments(actor: ServerActor, caseNumber: string
 }
 
 export async function getAttachmentDownload(actor: ServerActor, attachmentId: string) {
+  const row = await authorizeAttachmentDownload(actor, attachmentId);
+  const { FILES } = await getPersistenceBindings();
+  const object = await FILES.get(row.storage_key);
+  if (!object?.body) throw new FileAccessError(404, "Filen findes ikke i dokumentlageret.");
+  return { row, object };
+}
+
+export async function authorizeAttachmentDownload(actor: ServerActor, attachmentId: string) {
   await ensurePortalSchema();
-  const { DB, FILES } = await getPersistenceBindings();
+  const { DB } = await getPersistenceBindings();
   const ownerClause = actor.role === "user" ? "AND application.owner_user_id = ?" : "";
   const statement = DB.prepare(`
     SELECT attachment.id, attachment.original_name, attachment.size_bytes,
@@ -76,7 +84,5 @@ export async function getAttachmentDownload(actor: ServerActor, attachmentId: st
     ? await statement.bind(attachmentId, actor.tenantId, actor.userId).first<FileRow>()
     : await statement.bind(attachmentId, actor.tenantId).first<FileRow>();
   if (!row) throw new FileAccessError(404, "Filen findes ikke, eller du har ikke adgang.");
-  const object = await FILES.get(row.storage_key);
-  if (!object?.body) throw new FileAccessError(404, "Filen findes ikke i dokumentlageret.");
-  return { row, object };
+  return row;
 }

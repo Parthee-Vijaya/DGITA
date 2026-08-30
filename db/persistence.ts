@@ -69,6 +69,15 @@ export const portalSchemaStatements = [
   "CREATE UNIQUE INDEX IF NOT EXISTS portal_tenants_slug_uidx ON portal_tenants(slug)",
   "CREATE INDEX IF NOT EXISTS portal_tenants_status_idx ON portal_tenants(status)",
 
+  `CREATE TABLE IF NOT EXISTS portal_bootstrap_state (
+    tenant_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    version TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, scope),
+    FOREIGN KEY (tenant_id) REFERENCES portal_tenants(id) ON DELETE CASCADE
+  )`,
+
   `CREATE TABLE IF NOT EXISTS portal_users (
     id TEXT PRIMARY KEY NOT NULL,
     tenant_id TEXT NOT NULL,
@@ -206,6 +215,21 @@ export const portalSchemaStatements = [
   `CREATE INDEX IF NOT EXISTS portal_attachments_application_idx
     ON portal_attachments(tenant_id, application_id, created_at)`,
   "CREATE INDEX IF NOT EXISTS portal_attachments_version_idx ON portal_attachments(application_version_id)",
+
+  `CREATE TABLE IF NOT EXISTS portal_attachment_upload_locks (
+    attachment_id TEXT PRIMARY KEY NOT NULL,
+    authoritative_storage_key TEXT NOT NULL,
+    lease_token TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (attachment_id) REFERENCES portal_attachments(id) ON DELETE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS portal_attachment_upload_locks_storage_key_uidx
+    ON portal_attachment_upload_locks(authoritative_storage_key)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS portal_attachment_upload_locks_token_uidx
+    ON portal_attachment_upload_locks(lease_token)`,
+  `CREATE INDEX IF NOT EXISTS portal_attachment_upload_locks_expiry_idx
+    ON portal_attachment_upload_locks(expires_at)`,
 
   `CREATE TABLE IF NOT EXISTS portal_content_entries (
     id TEXT PRIMARY KEY NOT NULL,
@@ -471,6 +495,22 @@ export const portalSchemaStatements = [
     BEFORE DELETE ON portal_attachments
     WHEN OLD.application_version_id IS NOT NULL
     BEGIN SELECT RAISE(ABORT, 'versioned attachments are immutable'); END`,
+  `CREATE TRIGGER IF NOT EXISTS portal_attachment_upload_locks_insert_guard
+    BEFORE INSERT ON portal_attachment_upload_locks
+    WHEN NOT EXISTS (
+      SELECT 1 FROM portal_attachments
+      WHERE id = NEW.attachment_id AND application_version_id IS NULL
+        AND status IN ('pending', 'verifying')
+    )
+    BEGIN SELECT RAISE(ABORT, 'upload locks require a mutable pending attachment'); END`,
+  `CREATE TRIGGER IF NOT EXISTS portal_attachment_upload_locks_update_guard
+    BEFORE UPDATE ON portal_attachment_upload_locks
+    WHEN NOT EXISTS (
+      SELECT 1 FROM portal_attachments
+      WHERE id = NEW.attachment_id AND application_version_id IS NULL
+        AND status IN ('pending', 'verifying')
+    )
+    BEGIN SELECT RAISE(ABORT, 'upload locks require a mutable pending attachment'); END`,
   `CREATE TRIGGER IF NOT EXISTS portal_audit_events_no_update
     BEFORE UPDATE ON portal_audit_events
     BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END`,
@@ -481,6 +521,7 @@ export const portalSchemaStatements = [
 
 let legacySchemaPromise: Promise<void> | null = null;
 let portalSchemaPromise: Promise<void> | null = null;
+let vercelBindingsPromise: Promise<PersistenceBindings> | null = null;
 
 export class PersistenceUnavailableError extends Error {
   readonly code = "PERSISTENCE_UNAVAILABLE";
@@ -500,7 +541,60 @@ export function isPersistenceUnavailable(error: unknown) {
   );
 }
 
+function safePersistenceErrorField(error: unknown, field: "name" | "code") {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as Record<string, unknown>;
+  if (!(field in candidate)) return undefined;
+  const value = candidate[field];
+  return typeof value === "string" && /^[A-Z0-9_.:-]{1,80}$/iu.test(value)
+    ? value
+    : undefined;
+}
+
+function logVercelPersistenceInitializationFailure(
+  error: unknown,
+  environment: Record<string, string | undefined>,
+) {
+  // Log kun fejlklassifikation og tilstedeværelsen af konfiguration. URL'er,
+  // tokens og fejlbeskeder kan indeholde secrets og må aldrig ende i loggen.
+  console.error("Vercel persistence initialization failed", {
+    errorName: safePersistenceErrorField(error, "name"),
+    errorCode: safePersistenceErrorField(error, "code"),
+    hasDatabaseUrl: Boolean(environment.TURSO_DATABASE_URL?.trim()),
+    hasDatabaseToken: Boolean(environment.TURSO_AUTH_TOKEN?.trim()),
+    hasBlobStoreId: Boolean(environment.BLOB_STORE_ID?.trim()),
+    hasBlobToken: Boolean(environment.BLOB_READ_WRITE_TOKEN?.trim()),
+    hasOidcToken: Boolean(environment.VERCEL_OIDC_TOKEN?.trim()),
+  });
+}
+
 export async function getPersistenceBindings(): Promise<PersistenceBindings> {
+  const runtimeEnvironment = typeof process === "undefined" ? {} : process.env;
+  const { hasVercelPersistenceSignal } = await import("./persistence-runtime");
+
+  if (hasVercelPersistenceSignal(runtimeEnvironment)) {
+    if (!vercelBindingsPromise) {
+      vercelBindingsPromise = import("./vercel-persistence")
+        .then(async ({ createVercelPersistenceBindings, readVercelPersistenceEnvironment }) => {
+          const environment = readVercelPersistenceEnvironment(runtimeEnvironment);
+          if (!environment) throw new PersistenceUnavailableError();
+          return createVercelPersistenceBindings(environment);
+        })
+        .catch((error) => {
+          vercelBindingsPromise = null;
+          throw error;
+        });
+    }
+
+    try {
+      return await vercelBindingsPromise;
+    } catch (error) {
+      if (isPersistenceUnavailable(error)) throw error;
+      logVercelPersistenceInitializationFailure(error, runtimeEnvironment);
+      throw new PersistenceUnavailableError();
+    }
+  }
+
   try {
     const { env } = await import("cloudflare:workers");
     const bindings = env as unknown as PersistenceBindings;

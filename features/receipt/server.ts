@@ -109,10 +109,10 @@ export async function getOrCreateReceipt(
   const bytes = await renderReceipt(application, state, kind);
   const checksum = await sha256(bytes);
   const receiptId = stored?.id ?? `receipt:${actor.tenantId}:${application.receipt_version_id}:${kind}`;
-  const storageKey = `tenants/${actor.tenantId}/applications/${application.id}/receipts/${application.receipt_version_id}/${kind}-${checksum}.pdf`;
+  const pathname = `tenants/${actor.tenantId}/applications/${application.id}/receipts/${application.receipt_version_id}/${kind}-${checksum}.pdf`;
   const now = new Date().toISOString();
 
-  await FILES.put(storageKey, bytes, {
+  const storedReceipt = await FILES.put(pathname, bytes, {
     httpMetadata: { contentType: "application/pdf" },
     customMetadata: {
       tenantId: actor.tenantId,
@@ -143,7 +143,7 @@ export async function getOrCreateReceipt(
         application.id,
         application.receipt_version_id,
         kind,
-        storageKey,
+        storedReceipt.key,
         checksum,
         bytes.byteLength,
         actorUserId,

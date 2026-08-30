@@ -26,6 +26,11 @@ import {
 
 import type { CatalogSystem } from "../catalog/search";
 import {
+  isAllowedPrivateBlobUrl,
+  isAllowedVercelBlobUploadUrl,
+  sha256File,
+} from "./direct-upload-client";
+import {
   APPROVING_LEADERS,
   canOpenStep,
   createAttachmentDraft,
@@ -73,6 +78,8 @@ const descriptions = [
   "Vælg den godkendende chef, og tilføj eventuelle bemærkninger.",
   "Kontrollér oplysningerne, før ansøgningen låses og sendes.",
 ];
+
+const DIRECT_BLOB_UPLOADS = process.env.NEXT_PUBLIC_DGITA_UPLOAD_MODE === "vercel-blob";
 
 export type ApplicationSubmissionResult = {
   id: string;
@@ -446,23 +453,97 @@ export function ApplicationFormView({
     setActiveUploads((current) => current + validFiles.length);
     for (const { file, attachment: pending } of validFiles) {
       let uploadedAttachment: AttachmentDraft | null = null;
+      let directAttachmentId: string | null = null;
+      let directBlobUrl: string | null = null;
       try {
-        const upload = new FormData();
-        upload.set("draftId", activeDraftId);
-        upload.set("kind", kind);
-        upload.set("file", file);
-        const response = await fetch("/api/uploads", {
-          method: "POST",
-          body: upload,
-        });
-        const payload = (await response.json()) as {
-          attachment?: AttachmentDraft;
-          error?: string;
-        };
-        if (!response.ok || !payload.attachment) {
-          throw new Error(payload.error || "Filen kunne ikke uploades.");
+        if (DIRECT_BLOB_UPLOADS) {
+          const checksum = await sha256File(file);
+          const presignResponse = await fetch("/api/uploads/presign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              draftId: activeDraftId,
+              kind,
+              name: file.name,
+              size: file.size,
+              contentType: file.type,
+              checksum,
+            }),
+          });
+          const presignPayload = (await presignResponse.json()) as {
+            directUpload?: {
+              attachmentId: string;
+              uploadUrl: string;
+              contentType: string;
+              expiresAt: string;
+            };
+            error?: string;
+          };
+          if (!presignResponse.ok || !presignPayload.directUpload) {
+            throw new Error(presignPayload.error || "Filen kunne ikke klargøres til upload.");
+          }
+          const directUpload = presignPayload.directUpload;
+          directAttachmentId = directUpload.attachmentId;
+          if (!isAllowedVercelBlobUploadUrl(directUpload.uploadUrl)) {
+            throw new Error("Uploadadressen blev afvist af portalens sikkerhedskontrol.");
+          }
+          const blobResponse = await fetch(directUpload.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": directUpload.contentType },
+            body: file,
+          });
+          if (!blobResponse.ok) {
+            throw new Error("Filen kunne ikke overføres til dokumentlageret.");
+          }
+          const blobPayload = (await blobResponse.json()) as {
+            pathname?: unknown;
+            url?: unknown;
+          };
+          if (
+            typeof blobPayload.url !== "string" ||
+            typeof blobPayload.pathname !== "string" ||
+            !isAllowedPrivateBlobUrl(blobPayload.url)
+          ) {
+            throw new Error("Dokumentlageret returnerede en ugyldig filreference.");
+          }
+          directBlobUrl = blobPayload.url;
+          const completeResponse = await fetch("/api/uploads/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              draftId: activeDraftId,
+              attachmentId: directAttachmentId,
+              blobUrl: directBlobUrl,
+            }),
+          });
+          const completePayload = (await completeResponse.json()) as {
+            attachment?: AttachmentDraft;
+            error?: string;
+          };
+          if (!completeResponse.ok || !completePayload.attachment) {
+            throw new Error(completePayload.error || "Filen kunne ikke færdiggøres.");
+          }
+          uploadedAttachment = completePayload.attachment;
+          directAttachmentId = null;
+          directBlobUrl = null;
+        } else {
+          const upload = new FormData();
+          upload.set("draftId", activeDraftId);
+          upload.set("kind", kind);
+          upload.set("file", file);
+          const response = await fetch("/api/uploads", {
+            method: "POST",
+            body: upload,
+          });
+          const payload = (await response.json()) as {
+            attachment?: AttachmentDraft;
+            error?: string;
+          };
+          if (!response.ok || !payload.attachment) {
+            throw new Error(payload.error || "Filen kunne ikke uploades.");
+          }
+          uploadedAttachment = payload.attachment;
         }
-        uploadedAttachment = payload.attachment;
 
         if (!uploadedAttachment) {
           throw new Error("Filen kunne ikke gemmes.");
@@ -477,6 +558,17 @@ export function ApplicationFormView({
         formRef.current = nextState;
         setForm(nextState);
       } catch (error) {
+        if (directAttachmentId) {
+          await fetch("/api/uploads/complete", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              attachmentId: directAttachmentId,
+              blobUrl: directBlobUrl,
+              draftId: activeDraftId,
+            }),
+          }).catch(() => undefined);
+        }
         setSaveStatus("error");
         changeForm((current) =>
           replaceAttachment(current, kind, pending.id, {

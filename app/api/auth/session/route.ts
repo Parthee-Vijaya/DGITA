@@ -6,7 +6,7 @@ import {
   publicActor,
 } from "../../../../features/auth";
 import {
-  isDevLoginEnabled,
+  devLoginPolicy,
   parseCookie,
   SESSION_COOKIE_NAME,
   expiredSessionCookie,
@@ -17,15 +17,20 @@ export async function GET(request: Request) {
   try {
     const environment = await getAuthEnvironment();
     const actor = await getActor(request);
+    const devPolicy = devLoginPolicy(request.url, environment);
+    const devLoginAccessCodeRequired =
+      devPolicy.accessCodeRequired && actor?.provider !== "dev";
     const response: SessionResponse = actor
       ? {
           authenticated: true,
           viewer: publicActor(actor),
-          devLoginEnabled: isDevLoginEnabled(request.url, environment),
+          devLoginEnabled: devPolicy.enabled,
+          devLoginAccessCodeRequired,
         }
       : {
           authenticated: false,
-          devLoginEnabled: isDevLoginEnabled(request.url, environment),
+          devLoginEnabled: devPolicy.enabled,
+          devLoginAccessCodeRequired,
         };
     const hadCookie = parseCookie(
       request.headers.get("cookie"),

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex,
@@ -71,6 +72,21 @@ export const portalTenants = sqliteTable(
     uniqueIndex("portal_tenants_slug_uidx").on(table.slug),
     index("portal_tenants_status_idx").on(table.status),
   ],
+);
+
+export const portalBootstrapState = sqliteTable(
+  "portal_bootstrap_state",
+  {
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => portalTenants.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    version: text("version").notNull(),
+    completedAt: text("completed_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [primaryKey({ columns: [table.tenantId, table.scope] })],
 );
 
 export const portalUsers = sqliteTable(
@@ -283,7 +299,9 @@ export const portalAttachments = sqliteTable(
     contentType: text("content_type").notNull(),
     storageKey: text("storage_key").notNull(),
     checksumSha256: text("checksum_sha256").notNull(),
-    status: text("status", { enum: ["pending", "ready", "quarantined", "deleted"] })
+    status: text("status", {
+      enum: ["pending", "verifying", "ready", "quarantined", "deleted"],
+    })
       .notNull()
       .default("pending"),
     scanStatus: text("scan_status", {
@@ -311,6 +329,26 @@ export const portalAttachments = sqliteTable(
       table.createdAt,
     ),
     index("portal_attachments_version_idx").on(table.applicationVersionId),
+  ],
+);
+
+export const portalAttachmentUploadLocks = sqliteTable(
+  "portal_attachment_upload_locks",
+  {
+    attachmentId: text("attachment_id")
+      .primaryKey()
+      .references(() => portalAttachments.id, { onDelete: "cascade" }),
+    authoritativeStorageKey: text("authoritative_storage_key").notNull(),
+    leaseToken: text("lease_token").notNull(),
+    acquiredAt: text("acquired_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("portal_attachment_upload_locks_storage_key_uidx").on(
+      table.authoritativeStorageKey,
+    ),
+    uniqueIndex("portal_attachment_upload_locks_token_uidx").on(table.leaseToken),
+    index("portal_attachment_upload_locks_expiry_idx").on(table.expiresAt),
   ],
 );
 

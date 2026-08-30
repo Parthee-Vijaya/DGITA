@@ -17,7 +17,7 @@ const deploymentUrl = process.env.VERCEL_URL
   : "http://localhost:3000";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? deploymentUrl),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL?.trim() || deploymentUrl),
   title: "D-GITA · Den Gode IT-Anskaffelse",
   description:
     "Et moderne workspace til kommunale IT-anskaffelser, godkendelser, dokumentation og kvitteringer.",

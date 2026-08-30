@@ -23,6 +23,7 @@ import {
   normalizeFieldCommentInput,
   normalizeWorkspaceCaseId,
 } from "./validation";
+import { ensureVersionedSeed, PORTAL_DEFAULT_SEED } from "./seed-guard";
 
 export type PortalActor = {
   userId?: string;
@@ -142,7 +143,7 @@ export class PortalAccessError extends Error {
 export async function preparePortalData() {
   await ensurePortalSchema();
   const { DB } = await getPersistenceBindings();
-  await seedPortalDefaults(DB);
+  await ensureVersionedSeed(DB, PORTAL_DEFAULT_SEED, seedPortalDefaults);
   return DB;
 }
 
@@ -384,14 +385,14 @@ export async function upsertImageForActor(actor: PortalActor, entry: ImageEntry)
     const checksum = await sha256Bytes(uploaded.bytes);
     const extension = uploaded.contentType === "image/jpeg" ? "jpg" : uploaded.contentType.split("/")[1];
     const originalName = `${entry.id.replace(/[^a-zA-Z0-9._-]+/g, "-")}.${extension}`;
-    const storageKey = `tenants/${actor.tenantId}/content-images/${entry.id}/${id}.${extension}`;
-    await FILES.put(storageKey, uploaded.bytes, {
+    const pathname = `tenants/${actor.tenantId}/content-images/${entry.id}/${id}.${extension}`;
+    const stored = await FILES.put(pathname, uploaded.bytes, {
       httpMetadata: { contentType: uploaded.contentType },
       customMetadata: { tenantId: actor.tenantId, contentEntryId, checksum },
     });
     newAsset = {
       id,
-      storage_key: storageKey,
+      storage_key: stored.key,
       content_type: uploaded.contentType,
       size_bytes: uploaded.bytes.byteLength,
       checksum_sha256: checksum,

@@ -8,10 +8,12 @@ import {
   LockKeyhole,
   ShieldCheck,
 } from "lucide-react";
+import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import type { WorkspaceRole } from "../../features/workspace/model";
+import styles from "./LoginClient.module.css";
 
 const ROLE_LABELS: Record<WorkspaceRole, string> = {
   user: "Bruger",
@@ -22,6 +24,7 @@ const ROLE_LABELS: Record<WorkspaceRole, string> = {
 type SessionResponse = {
   authenticated: boolean;
   devLoginEnabled?: boolean;
+  devLoginAccessCodeRequired?: boolean;
   error?: string;
 };
 
@@ -29,6 +32,8 @@ export function LoginClient() {
   const router = useRouter();
   const [role, setRole] = useState<WorkspaceRole>("user");
   const [devLoginEnabled, setDevLoginEnabled] = useState(false);
+  const [accessCodeRequired, setAccessCodeRequired] = useState(false);
+  const [accessCode, setAccessCode] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -43,6 +48,7 @@ export function LoginClient() {
           return;
         }
         setDevLoginEnabled(Boolean(payload.devLoginEnabled));
+        setAccessCodeRequired(Boolean(payload.devLoginAccessCodeRequired));
       })
       .catch((reason: unknown) => {
         if ((reason as Error).name !== "AbortError") {
@@ -53,14 +59,18 @@ export function LoginClient() {
     return () => controller.abort();
   }, [router]);
 
-  async function signInForTesting() {
+  async function signInForTesting(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setSubmitting(true);
     setError("");
     try {
       const response = await fetch("/api/auth/dev-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
+        body: JSON.stringify({
+          role,
+          ...(accessCodeRequired ? { accessCode } : {}),
+        }),
       });
       const payload = (await response.json()) as SessionResponse;
       if (!response.ok || !payload.authenticated) {
@@ -117,7 +127,7 @@ export function LoginClient() {
 
           <div className="login-divider"><span>Testmiljø</span></div>
 
-          <div className="login-test-box">
+          <form className="login-test-box" onSubmit={(event) => void signInForTesting(event)}>
             <div><strong>Afprøv rollebaseret adgang</strong><small>Kun tilgængelig lokalt eller ved eksplicit testopsætning.</small></div>
             <label>
               Rolle
@@ -127,11 +137,34 @@ export function LoginClient() {
                 ))}
               </select>
             </label>
-            <button className="login-submit" type="button" onClick={() => void signInForTesting()} disabled={!devLoginEnabled || loading || submitting}>
+            {devLoginEnabled && accessCodeRequired ? (
+              <label className={styles.accessCodeField}>
+                Demo-adgangskode
+                <span className={styles.accessCodeInput}>
+                  <LockKeyhole size={17} aria-hidden="true" />
+                  <input
+                    type="password"
+                    value={accessCode}
+                    onChange={(event) => setAccessCode(event.target.value)}
+                    autoComplete="current-password"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    minLength={32}
+                    required
+                    disabled={submitting}
+                    aria-describedby="demo-access-help"
+                  />
+                </span>
+                <small id="demo-access-help" className={styles.accessCodeHelp}>
+                  Indtast den adgangskode, du har modtaget til demoen.
+                </small>
+              </label>
+            ) : null}
+            <button className="login-submit" type="submit" disabled={!devLoginEnabled || loading || submitting || (accessCodeRequired && accessCode.length === 0)}>
               {submitting ? "Logger ind…" : "Fortsæt til portalen"}
               {!submitting ? <ArrowRight size={18} /> : null}
             </button>
-          </div>
+          </form>
 
           {error ? <p className="login-error" role="alert">{error}</p> : null}
           {!loading && !devLoginEnabled && !error ? <p className="login-status" role="status">Testlogin er deaktiveret i dette miljø. Kommunens identitetsforbindelse skal konfigureres af en administrator.</p> : null}

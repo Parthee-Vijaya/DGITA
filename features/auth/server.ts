@@ -22,7 +22,11 @@ import {
   type AuthProvider,
   type ServerActor,
 } from "./types";
-import { assertDemoLoginAccess } from "./demo-access";
+import { assertTestLoginAccess } from "./test-access";
+import {
+  clearTestLoginRateLimit,
+  consumeTestLoginRateLimit,
+} from "./test-login-rate-limit";
 
 type ActorRow = {
   user_id: string;
@@ -156,12 +160,21 @@ export async function createDevSession(
     const currentActor = await getActor(request);
     currentProvider = currentActor?.provider ?? null;
   }
-  await assertDemoLoginAccess(
+  const rateLimitSubject =
+    policy.enabled &&
+    policy.accessCodeRequired &&
+    currentProvider !== "dev"
+      ? await consumeTestLoginRateLimit(request)
+      : null;
+  await assertTestLoginAccess(
     request.url,
     runtimeEnvironment,
     accessCode,
     currentProvider,
   );
+  if (rateLimitSubject) {
+    await clearTestLoginRateLimit(rateLimitSubject);
+  }
 
   await ensurePortalSchema();
   const { DB } = await getPersistenceBindings();

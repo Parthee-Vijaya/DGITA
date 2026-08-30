@@ -1086,7 +1086,7 @@ async function seedDemoApplications(DB: D1Database, fallbackNow: string) {
             item.leader,
             seedTokenHash,
             approvalStatus,
-            approvalStatus === "approved" ? "Godkendt i demonstrationsdata" : "Afvist i demonstrationsdata",
+            approvalStatus === "approved" ? "Godkendt i testdata" : "Afvist i testdata",
             DEMO_VIEWERS.consultant.subject,
             submittedAt,
             submittedAt,
@@ -1097,6 +1097,29 @@ async function seedDemoApplications(DB: D1Database, fallbackNow: string) {
     }
   }
   await runBatches(DB, statements);
+  await DB.batch([
+    DB.prepare(`
+      UPDATE portal_approval_requests
+      SET decision_comment = CASE decision_comment
+        WHEN 'Godkendt i demonstrationsdata' THEN 'Godkendt i testdata'
+        WHEN 'Afvist i demonstrationsdata' THEN 'Afvist i testdata'
+        ELSE decision_comment
+      END
+      WHERE tenant_id = 'kalundborg'
+        AND token_hash LIKE 'demo-token-hash:%'
+        AND decision_comment IN (
+          'Godkendt i demonstrationsdata',
+          'Afvist i demonstrationsdata'
+        )
+    `),
+    DB.prepare(`
+      UPDATE portal_approval_requests
+      SET approver_email = 'test-leder@kalundborg.dk'
+      WHERE tenant_id = 'kalundborg'
+        AND token_hash LIKE 'demo-token-hash:%'
+        AND approver_email = 'demo-leder@kalundborg.dk'
+    `),
+  ]);
 
   for (const [caseNumber, approval] of Object.entries(DEFAULT_APPROVALS)) {
     const application = await DB.prepare(
@@ -1285,7 +1308,7 @@ function demoLeaderEmail(name: string) {
   if (name === "Partheepan Vijayamohan") return DEMO_VIEWERS.user.email;
   if (name === "Peter Bjerre Ahlgren") return "peter.bjerre@kalundborg.dk";
   if (name === "Anita Mark Vig Lauridsen") return "anita.lauridsen@kalundborg.dk";
-  return "demo-leder@kalundborg.dk";
+  return "test-leder@kalundborg.dk";
 }
 
 function parseJson<T>(value: string): T | null {

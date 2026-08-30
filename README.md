@@ -2,9 +2,13 @@
 
 En moderne, webbaseret portal til kommunale IT-anskaffelser. Løsningen samler ansøgning, dokumentation, sagsbehandling, ledergodkendelse, Outlook-mail, PDF-kvitteringer og administration i ét responsivt workspace.
 
-Demonstrationssager, roller og personer er test-fixtures. Kontaktoplysninger fra den eksisterende portal er bevaret som redaktionelt demoindhold. Systemkataloget er normaliseret fra de udleverede KITOS- og Kalundborg-regneark og følger med repositoryet som deploybar runtime-data.
+Testsager, roller og personer er fiktive test-fixtures. Kontaktoplysninger fra den eksisterende portal er bevaret som redaktionelt testindhold. Systemkataloget er normaliseret fra de udleverede KITOS- og Kalundborg-regneark og følger med repositoryet som deploybar runtime-data.
 
 ![D-GITA-forsiden](docs/screenshots/home.jpg)
+
+## Visuel identitet
+
+Portalens primære tema følger Kalundborg Kommunes aktuelle webidentitet med terracotta, varme lyse flader og mørk tekst. Det officielle Kalundborg-logo bruges i lokal SVG-kopi fra kommunens [logo- og designside](https://www.kalundborg.dk/kommunen/presse-og-kommunikation/billeder-logo-og-design). D-GITA vises som produktnavn, mens det separate officielle DIGIT-logo repræsenterer [Digitaliseringsforeningen Sjælland](https://digitaliseringsforeningen.dk/).
 
 ## Status
 
@@ -181,14 +185,14 @@ DGITA_APPROVAL_TOKEN_SECRET=<mindst-32-tilfældige-tegn>
 CRON_SECRET=<mindst-32-tilfældige-tegn>
 ```
 
-`DGITA_ENABLE_DEV_LOGIN=true` aktiverer de fiktive testidentiteter og rolle-dropdownen. På andre værter end localhost skal der samtidig konfigureres en tilfældig `DGITA_DEMO_ACCESS_SECRET` på mindst 32 tegn. Første testlogin kræver denne adgangskode, mens en allerede godkendt dev-session fortsat kan skifte testrolle uden at indtaste den igen. Mangler secret'en, eller er den for kort, fejler testlogin lukket.
+`DGITA_ENABLE_DEV_LOGIN=true` aktiverer de fiktive testidentiteter og rolle-dropdownen. På andre værter end localhost skal der samtidig konfigureres en `DGITA_TEST_ACCESS_SECRET` på mindst 8 tegn. Første testlogin kræver denne adgangskode, mens en allerede godkendt testsession fortsat kan skifte testrolle uden at indtaste den igen. Mangler serverkoden, eller er den for kort, fejler testlogin lukket.
 
 ```dotenv
 DGITA_ENABLE_DEV_LOGIN=true
-DGITA_DEMO_ACCESS_SECRET=<mindst-32-tilfældige-tegn>
+DGITA_TEST_ACCESS_SECRET=<mindst-8-tegn>
 ```
 
-Demo-adgangskoden erstatter ikke rigtig identitetskontrol. En sådan deployment må derfor kun indeholde fiktive data og må ikke bruges som kommunal produktion. Sæt `DGITA_ENABLE_DEV_LOGIN=false` før brug med rigtige data og erstat flowet med Entra ID eller Fælleskommunal Adgangsstyring.
+Testadgangskoden erstatter ikke rigtig identitetskontrol. En sådan deployment må derfor kun indeholde fiktive data og må ikke bruges som kommunal produktion. Sæt `DGITA_ENABLE_DEV_LOGIN=false` før brug med rigtige data og erstat flowet med Entra ID eller Fælleskommunal Adgangsstyring.
 
 ### Microsoft Graph / Outlook
 
@@ -220,7 +224,7 @@ På Vercel leveres den samme SQLite-kompatible databasekontrakt af Turso/libSQL,
 
 Drizzle-migrationerne i `drizzle/` er deployment-kilden. Runtime-bootstrap er idempotent og gør en frisk database klar uden browserlagring. Cloudflare-buildet pakker desuden migrationsfilerne under `dist/.openai/drizzle`.
 
-En frisk demo-database seedes deterministisk med de fiktive brugere, de ti demonstrationssager, redaktionelt testindhold og de tilhørende workflowdata. Systemkatalogets 4.656 poster ligger som committed runtime-data. Den lokale udviklingsdatabase og E2E-rester kopieres ikke til drift.
+En frisk testdatabase seedes deterministisk med de fiktive brugere, de ti testsager, redaktionelt testindhold og de tilhørende workflowdata. Systemkatalogets 4.656 poster ligger som committed runtime-data. Den lokale udviklingsdatabase og E2E-rester kopieres ikke til drift.
 
 Det normaliserede systemkatalog ligger i `features/catalog/data/system-catalog.json` og er committed, så drift ikke afhænger af de lokale Excel-filer.
 
@@ -255,7 +259,7 @@ Projektet har to persistence-mål:
 
 `vercel.json` registrerer `GET /api/cron/mail` kl. 06:00 UTC én gang dagligt, som er kompatibelt med Hobby-planen. Vercel sender `CRON_SECRET` som et Bearer-token; endpointet afviser både manglende konfiguration og alle ikke-eksakte tokens. Cronjobbet behandler mailkøen og rydder sikkert op i udløbne upload-verifikationer. Cronjobs kører kun på production deployments. Ved hastesager kan en Admin fortsat vælge **Behandl kø** i mailadministrationen. Både cron og manuel mailbehandling kræver en færdig Microsoft Graph-konfiguration for at kunne sende.
 
-Til demo med testdata anvendes `DGITA_ENABLE_DEV_LOGIN=true` sammen med en separat `DGITA_DEMO_ACCESS_SECRET` på mindst 32 tegn. Kontrollér før deployment, at alle data fortsat er fiktive, og at miljøvariablerne er oprettet i det korrekte Vercel-miljø. En senere kommunal produktion skal bruge rigtigt SSO og `DGITA_ENABLE_DEV_LOGIN=false`.
+Til testmiljøet anvendes `DGITA_ENABLE_DEV_LOGIN=true` sammen med en separat `DGITA_TEST_ACCESS_SECRET` på mindst 8 tegn. Kontrollér før deployment, at alle data fortsat er fiktive, og at miljøvariablerne er oprettet i det korrekte Vercel-miljø. En senere kommunal produktion skal bruge rigtigt SSO og `DGITA_ENABLE_DEV_LOGIN=false`.
 
 Det direkte Vercel-upload undgår Functions' requestgrænse, og signerede download-redirects undgår responsegrænsen. Hver completion tager en 15-minutters CAS-lease, og kun den worker, der ejer leasen, kan færdigmelde eller kassere Blob'en. En mistet databasekvittering efter ready-commit medfører aldrig automatisk Blob-sletning. Udløbne `verifying`-rækker lægges i en holdbar slettekø, hvor Blob-sletning kvitteres separat og derfor kan gentages sikkert.
 

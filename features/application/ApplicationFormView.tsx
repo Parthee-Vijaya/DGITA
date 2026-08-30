@@ -995,7 +995,7 @@ export function ApplicationFormView({
             <button className="line-button" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void saveDraft()}>{activeUploads > 0 ? "Uploader bilag…" : saveStatus === "saving" ? "Gemmer…" : correction ? "Gem rettelser" : "Gem kladde"}</button>
             <div>
               {step > 0 ? <button className="text-nav-button" type="button" onClick={() => goToStep(step - 1)}><ArrowLeft size={17} /> Forrige</button> : null}
-              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button green" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void submit()}><Send size={17} /> {activeUploads > 0 ? "Uploader bilag…" : correction ? `Genindsend version ${correction.nextVersionNumber}` : "Gem og indsend"}</button>}
+              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void submit()}><Send size={17} /> {activeUploads > 0 ? "Uploader bilag…" : correction ? `Genindsend version ${correction.nextVersionNumber}` : "Gem og indsend"}</button>}
             </div>
           </div>
         </section>

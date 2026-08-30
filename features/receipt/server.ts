@@ -287,14 +287,14 @@ class ReceiptLayout {
       y: this.height - 184,
       width: this.width,
       height: 184,
-      color: rgb(0.04, 0.12, 0.11),
+      color: rgb(0.737, 0.302, 0.188),
     });
     this.page.drawText(pdfSafe(eyebrow.toUpperCase()), {
       x: this.margin,
       y: this.height - 70,
       size: 11,
       font: this.bold,
-      color: rgb(0.58, 0.79, 0.66),
+      color: rgb(0.973, 0.929, 0.918),
     });
     this.page.drawText(pdfSafe(title), {
       x: this.margin,
@@ -313,14 +313,14 @@ class ReceiptLayout {
       y: this.y,
       size: 8.5,
       font: this.bold,
-      color: rgb(0.35, 0.4, 0.39),
+      color: rgb(0.325, 0.369, 0.439),
     });
     this.page.drawText(pdfSafe(value || "Ikke oplyst"), {
       x: this.margin + 112,
       y: this.y,
       size: 10.5,
       font: this.regular,
-      color: rgb(0.08, 0.13, 0.12),
+      color: rgb(0.145, 0.145, 0.145),
     });
     this.y -= 24;
   }
@@ -331,7 +331,7 @@ class ReceiptLayout {
       start: { x: this.margin, y: this.y },
       end: { x: this.width - this.margin, y: this.y },
       thickness: 0.7,
-      color: rgb(0.81, 0.84, 0.82),
+      color: rgb(0.847, 0.839, 0.808),
     });
     this.y -= 20;
   }
@@ -345,7 +345,7 @@ class ReceiptLayout {
         y: this.y,
         size: 10,
         font: this.regular,
-        color: rgb(0.24, 0.29, 0.28),
+        color: rgb(0.275, 0.31, 0.369),
       });
       this.y -= 14;
     }
@@ -360,7 +360,7 @@ class ReceiptLayout {
       y: this.y,
       size: 14,
       font: this.bold,
-      color: rgb(0.04, 0.22, 0.17),
+      color: rgb(0.608, 0.251, 0.157),
     });
     this.y -= 25;
   }
@@ -375,7 +375,7 @@ class ReceiptLayout {
       y: this.y,
       size: 8.5,
       font: this.bold,
-      color: rgb(0.38, 0.42, 0.41),
+      color: rgb(0.325, 0.369, 0.439),
     });
     let valueY = this.y;
     for (const line of lines) {
@@ -384,7 +384,7 @@ class ReceiptLayout {
         y: valueY,
         size: 9.5,
         font: this.regular,
-        color: rgb(0.08, 0.13, 0.12),
+        color: rgb(0.145, 0.145, 0.145),
       });
       valueY -= 13;
     }
@@ -393,7 +393,7 @@ class ReceiptLayout {
       start: { x: this.margin, y: this.y + 6 },
       end: { x: this.width - this.margin, y: this.y + 6 },
       thickness: 0.35,
-      color: rgb(0.88, 0.9, 0.89),
+      color: rgb(0.91, 0.898, 0.863),
     });
   }
 
@@ -405,7 +405,7 @@ class ReceiptLayout {
         y: 27,
         size: 8,
         font: this.regular,
-        color: rgb(0.42, 0.46, 0.45),
+        color: rgb(0.275, 0.31, 0.369),
       });
     });
   }
@@ -424,7 +424,7 @@ class ReceiptLayout {
         y: this.y,
         size: 9,
         font: this.bold,
-        color: rgb(0.04, 0.22, 0.17),
+        color: rgb(0.608, 0.251, 0.157),
       });
       this.y -= 30;
     }

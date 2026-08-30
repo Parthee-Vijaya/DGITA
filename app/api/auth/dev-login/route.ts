@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     if (!isWorkspaceRole(role)) {
       throw new AuthHttpError(
         400,
-        "INVALID_DEMO_VIEWER",
+        "INVALID_TEST_ROLE",
         "Vælg en gyldig testrolle.",
       );
     }
@@ -43,8 +43,8 @@ export async function POST(request: Request) {
     if (accessCode !== undefined && typeof accessCode !== "string") {
       throw new AuthHttpError(
         400,
-        "INVALID_DEMO_ACCESS_CODE",
-        "Demo-adgangskoden skal være tekst.",
+        "INVALID_TEST_ACCESS_CODE",
+        "Testadgangskoden skal være tekst.",
       );
     }
 

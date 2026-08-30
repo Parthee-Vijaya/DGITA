@@ -175,6 +175,21 @@ export const portalSessions = sqliteTable(
   ],
 );
 
+export const portalAuthRateLimits = sqliteTable(
+  "portal_auth_rate_limits",
+  {
+    scope: text("scope").notNull(),
+    subjectHash: text("subject_hash").notNull(),
+    windowStartedAt: integer("window_started_at").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scope, table.subjectHash] }),
+    index("portal_auth_rate_limits_updated_idx").on(table.updatedAt),
+  ],
+);
+
 export const portalApplications = sqliteTable(
   "portal_applications",
   {

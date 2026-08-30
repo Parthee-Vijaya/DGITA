@@ -3,7 +3,7 @@
   inset: 0;
   z-index: 10000;
   pointer-events: none;
-  color: #17221d;
+  color: #252525;
 }
 
 .interactionShield,
@@ -18,18 +18,18 @@
 }
 
 .fallbackScrim {
-  background: rgb(10 20 16 / 72%);
+  background: rgb(37 37 37 / 72%);
   backdrop-filter: blur(2px);
 }
 
 .spotlight {
   position: fixed;
   z-index: 1;
-  border: 2px solid #d3ff63;
+  border: 2px solid #d47055;
   border-radius: 14px;
   box-shadow:
-    0 0 0 9999px rgb(10 20 16 / 72%),
-    0 0 0 5px rgb(211 255 99 / 22%),
+    0 0 0 9999px rgb(37 37 37 / 72%),
+    0 0 0 5px rgb(188 77 48 / 24%),
     0 14px 45px rgb(0 0 0 / 25%);
   pointer-events: none;
   transition: top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease;
@@ -42,7 +42,7 @@
   max-height: calc(100vh - 32px);
   overflow: auto;
   padding: 25px;
-  border: 1px solid rgb(25 54 43 / 14%);
+  border: 1px solid rgb(188 77 48 / 18%);
   border-radius: 18px;
   background: #fff;
   box-shadow: 0 22px 70px rgb(0 0 0 / 28%);
@@ -52,7 +52,7 @@
 
 .dialog:focus-visible {
   box-shadow:
-    0 0 0 4px rgb(68 112 94 / 26%),
+    0 0 0 4px rgb(188 77 48 / 24%),
     0 22px 70px rgb(0 0 0 / 28%);
 }
 
@@ -73,8 +73,8 @@
   place-items: center;
   border: 0;
   border-radius: 50%;
-  background: #f1f4f2;
-  color: #263a31;
+  background: #f8edea;
+  color: #464f5e;
   font: inherit;
   font-size: 25px;
   line-height: 1;
@@ -82,14 +82,14 @@
 }
 
 .closeButton:hover {
-  background: #e4eae6;
+  background: #f4e3df;
 }
 
 .closeButton:focus-visible,
 .skipButton:focus-visible,
 .secondaryButton:focus-visible,
 .primaryButton:focus-visible {
-  outline: 3px solid rgb(45 100 79 / 32%);
+  outline: 3px solid rgb(188 77 48 / 30%);
   outline-offset: 2px;
 }
 
@@ -103,7 +103,7 @@
 }
 
 .stepLabel {
-  color: #547064;
+  color: #535e70;
   font-size: 0.75rem;
   font-weight: 750;
   letter-spacing: 0.08em;
@@ -120,25 +120,25 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #cfd9d4;
+  background: #c4c8ce;
   transition: width 160ms ease, background 160ms ease;
 }
 
 .progressDots .activeDot {
   width: 20px;
-  background: #2d644f;
+  background: #bc4d30;
 }
 
 .dialog h2 {
   margin: 18px 42px 9px 0;
-  color: #17221d;
+  color: #252525;
   font-size: clamp(1.3rem, 4vw, 1.65rem);
   line-height: 1.18;
   letter-spacing: -0.025em;
 }
 
 .body {
-  color: #52645c;
+  color: #535e70;
   font-size: 0.95rem;
   line-height: 1.62;
 }
@@ -199,15 +199,15 @@
   padding-inline: 2px;
   border: 0;
   background: transparent;
-  color: #64766e;
+  color: #535e70;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 .secondaryButton {
-  border: 1px solid #cbd5d0;
+  border: 1px solid #c4c8ce;
   background: #fff;
-  color: #294137;
+  color: #464f5e;
 }
 
 .secondaryButton:disabled {
@@ -216,14 +216,14 @@
 }
 
 .primaryButton {
-  border: 1px solid #234f3e;
-  background: #234f3e;
+  border: 1px solid #bc4d30;
+  background: #bc4d30;
   color: #fff;
 }
 
 .primaryButton:hover {
-  border-color: #183a2d;
-  background: #183a2d;
+  border-color: #9b4028;
+  background: #9b4028;
 }
 
 @media (max-width: 540px) {

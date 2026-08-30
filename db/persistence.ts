@@ -132,6 +132,17 @@ export const portalSchemaStatements = [
     ON portal_sessions(tenant_id, user_id, revoked_at, expires_at)`,
   "CREATE INDEX IF NOT EXISTS portal_sessions_expiry_idx ON portal_sessions(expires_at)",
 
+  `CREATE TABLE IF NOT EXISTS portal_auth_rate_limits (
+    scope TEXT NOT NULL,
+    subject_hash TEXT NOT NULL,
+    window_started_at INTEGER NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (scope, subject_hash)
+  )`,
+  `CREATE INDEX IF NOT EXISTS portal_auth_rate_limits_updated_idx
+    ON portal_auth_rate_limits(updated_at)`,
+
   `CREATE TABLE IF NOT EXISTS portal_applications (
     id TEXT PRIMARY KEY NOT NULL,
     tenant_id TEXT NOT NULL,

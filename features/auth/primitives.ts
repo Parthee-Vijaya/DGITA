@@ -2,7 +2,7 @@ import type { WorkspaceRole } from "../workspace/model";
 
 export const SESSION_COOKIE_NAME = "dgita_session";
 export const SESSION_TTL_SECONDS = 12 * 60 * 60;
-export const MIN_DEMO_ACCESS_SECRET_LENGTH = 32;
+export const MIN_TEST_ACCESS_SECRET_LENGTH = 8;
 const AUTH_ROLES = ["user", "consultant", "admin"] as const;
 
 export type AuthEnvironment = Record<string, string | undefined>;
@@ -125,7 +125,7 @@ export function devLoginPolicy(
     } as const;
   }
 
-  const configurationValid = hasValidDemoAccessSecret(environment);
+  const configurationValid = hasValidTestAccessSecret(environment);
   return {
     enabled: configurationValid,
     accessCodeRequired: true,
@@ -133,22 +133,22 @@ export function devLoginPolicy(
   } as const;
 }
 
-export function hasValidDemoAccessSecret(
+export function hasValidTestAccessSecret(
   environment: AuthEnvironment = {},
 ) {
-  const secret = environment.DGITA_DEMO_ACCESS_SECRET;
+  const secret = testAccessSecret(environment);
   return (
     typeof secret === "string" &&
-    secret.length >= MIN_DEMO_ACCESS_SECRET_LENGTH &&
+    secret.length >= MIN_TEST_ACCESS_SECRET_LENGTH &&
     secret.trim() === secret
   );
 }
 
-export async function verifyDemoAccessCode(
+export async function verifyTestAccessCode(
   accessCode: string | undefined,
   environment: AuthEnvironment = {},
 ) {
-  const expected = environment.DGITA_DEMO_ACCESS_SECRET ?? "";
+  const expected = testAccessSecret(environment) ?? "";
   const supplied = accessCode ?? "";
   const [expectedDigest, suppliedDigest] = await Promise.all([
     sha256Bytes(expected),
@@ -160,7 +160,14 @@ export async function verifyDemoAccessCode(
     difference |= expectedDigest[index] ^ suppliedDigest[index];
   }
 
-  return hasValidDemoAccessSecret(environment) && difference === 0;
+  return hasValidTestAccessSecret(environment) && difference === 0;
+}
+
+function testAccessSecret(environment: AuthEnvironment) {
+  return (
+    environment.DGITA_TEST_ACCESS_SECRET ??
+    environment.DGITA_DEMO_ACCESS_SECRET
+  );
 }
 
 function isLocalRequestUrl(requestUrl: string | URL) {

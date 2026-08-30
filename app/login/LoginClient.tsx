@@ -12,6 +12,7 @@ import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { BrandLockup } from "../../features/brand/BrandLockup";
 import type { WorkspaceRole } from "../../features/workspace/model";
 import styles from "./LoginClient.module.css";
 
@@ -90,8 +91,7 @@ export function LoginClient() {
         <div className="login-story-image" aria-hidden="true" />
         <div className="login-story-shade" aria-hidden="true" />
         <div className="login-wordmark">
-          <span>D</span>
-          <div><strong>D-GITA</strong><small>Den Gode IT-Anskaffelse</small></div>
+          <BrandLockup tone="inverse" />
         </div>
         <div className="login-story-copy">
           <span className="login-kicker">Kalundborg Kommune</span>
@@ -139,7 +139,7 @@ export function LoginClient() {
             </label>
             {devLoginEnabled && accessCodeRequired ? (
               <label className={styles.accessCodeField}>
-                Demo-adgangskode
+                Testadgangskode
                 <span className={styles.accessCodeInput}>
                   <LockKeyhole size={17} aria-hidden="true" />
                   <input
@@ -149,14 +149,14 @@ export function LoginClient() {
                     autoComplete="current-password"
                     autoCapitalize="none"
                     spellCheck={false}
-                    minLength={32}
+                    minLength={8}
                     required
                     disabled={submitting}
-                    aria-describedby="demo-access-help"
+                    aria-describedby="test-access-help"
                   />
                 </span>
-                <small id="demo-access-help" className={styles.accessCodeHelp}>
-                  Indtast den adgangskode, du har modtaget til demoen.
+                <small id="test-access-help" className={styles.accessCodeHelp}>
+                  Indtast den adgangskode, du har modtaget til testmiljøet.
                 </small>
               </label>
             ) : null}

@@ -44,6 +44,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { Actor } from "../features/auth/types";
+import { BrandLockup } from "../features/brand/BrandLockup";
 import { ApplicationFormView } from "../features/application/ApplicationFormView";
 import {
   formatDanishAmount,
@@ -687,12 +688,8 @@ function Header({
     <header className="site-header">
       <a className="skip-link" href="#main-content">Gå til hovedindhold</a>
       <div className="header-inner">
-        <button className="wordmark" data-tour="home" type="button" onClick={() => onNavigate("home")}>
-          <span className="wordmark-symbol">D</span>
-          <span>
-            <strong>D-GITA</strong>
-            <small>Den Gode IT-Anskaffelse</small>
-          </span>
+        <button className="wordmark" data-tour="home" type="button" aria-label="Gå til startsiden" onClick={() => onNavigate("home")}>
+          <BrandLockup />
         </button>
 
         <nav className={cx("site-nav", mobileMenu && "open")} data-tour="primary-navigation" aria-label="Primær navigation">
@@ -738,6 +735,13 @@ function Header({
             {profileOpen ? (
               <div className="header-popover profile-menu">
                 <div className="profile-menu-head"><span>{viewer.initials}</span><div><strong>{viewer.displayName}</strong><small>{ROLE_LABELS[role]}{viewer.provider === "dev" ? " · testtilstand" : ""}</small></div></div>
+                {canSwitchRole ? <label className="profile-role-switcher">
+                  <span>Testrolle</span>
+                  <select aria-label="Skift testrolle fra profilmenuen" value={role} onChange={(event) => onRoleChange(event.target.value as WorkspaceRole)}>
+                    {WORKSPACE_ROLES.map((value) => <option key={value} value={value}>{ROLE_LABELS[value]}</option>)}
+                  </select>
+                  <ChevronDown size={14} aria-hidden="true" />
+                </label> : null}
                 {capabilitiesFor(role).createApplications ? <button type="button" onClick={() => onNavigate("cases")}><ReceiptText size={17} /> Mine kvitteringer</button> : null}
                 <button type="button" onClick={onTutorial}><BookOpen size={17} /> Tutorial</button>
                 {role === "admin" ? <button type="button" onClick={onToggleEditor}><PencilLine size={17} /> Editor mode: {editorMode ? "aktiv" : "slået fra"}</button> : null}
@@ -1162,7 +1166,7 @@ function CaseDetail({
       <button className="back-text" type="button" onClick={onBack}><ArrowLeft size={18} /> {viewer.role === "user" ? "Mine ansøgninger" : "Alle sager"}</button>
       <section className="case-title-block">
         <div><span className="section-label dark">{item.id} · {item.municipality} Kommune</span><h1>{item.system}</h1><div className="case-title-meta"><PhaseTag phase={item.phase} /><span>Ændret {item.changed}</span></div></div>
-        <div>{item.receiptAvailable ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=submission`}><Download size={17} /> Indsendelseskvittering</a> : <button className="line-button" type="button" disabled title="Kvitteringen oprettes, når ansøgningen er indsendt"><Download size={17} /> Indsendelseskvittering</button>}{item.approval === "Godkendt" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=approval`}><Download size={17} /> Godkendelseskvittering</a> : null}{item.phase === "Afsluttet" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=final`}><Download size={17} /> Slutkvittering</a> : null}{onStartCorrection ? <button className="solid-button green" type="button" onClick={onStartCorrection}><PencilLine size={17} /> Ret og genindsend</button> : null}{canProcess ? <button className="solid-button" type="button" onClick={() => setStatusComposerOpen((current) => !current)}><Mail size={17} /> Send statusmail</button> : null}</div>
+        <div>{item.receiptAvailable ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=submission`}><Download size={17} /> Indsendelseskvittering</a> : <button className="line-button" type="button" disabled title="Kvitteringen oprettes, når ansøgningen er indsendt"><Download size={17} /> Indsendelseskvittering</button>}{item.approval === "Godkendt" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=approval`}><Download size={17} /> Godkendelseskvittering</a> : null}{item.phase === "Afsluttet" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=final`}><Download size={17} /> Slutkvittering</a> : null}{onStartCorrection ? <button className="solid-button" type="button" onClick={onStartCorrection}><PencilLine size={17} /> Ret og genindsend</button> : null}{canProcess ? <button className="solid-button" type="button" onClick={() => setStatusComposerOpen((current) => !current)}><Mail size={17} /> Send statusmail</button> : null}</div>
       </section>
 
       {statusComposerOpen ? <section className="status-mail-composer" aria-label="Sæt statusmail i kø"><div><span className="section-label dark">Outlook-status</span><h2>Skriv status til {item.applicant}</h2><p>Mailen valideres og lægges i den idempotente mailkø. Den afsendes først, når Microsoft Graph er konfigureret.</p></div><textarea className="clean-input" rows={4} value={statusMessage} onChange={(event) => setStatusMessage(event.target.value)} placeholder="Skriv en kort, konkret status på sagen" maxLength={8000} /><div><button className="line-button" type="button" onClick={() => setStatusComposerOpen(false)}>Annuller</button><button className="solid-button" type="button" disabled={!statusMessage.trim() || mailSending} onClick={() => void queueStatusMessage()}><Send size={16} /> {mailSending ? "Gemmer…" : "Sæt i mailkø"}</button></div></section> : null}
@@ -1419,7 +1423,7 @@ function AdminView({
   ];
   const isContentTab = tab in CONTENT_CATEGORY_LABELS;
 
-  return <div className="portal-page page-width"><PageIntro eyebrow="Administration" title="Indhold, formular og workflows" text="Redigér portaltekster, hjælpetekster, FAQ, links og databehandlerkrav. Administratorrollen har samtidig adgang til sager og D-GITA-behandling."><div className="admin-demo-badge"><ShieldCheck size={17} /><span><strong>Admin · servervalideret</strong><small>{viewer.displayName}</small></span></div></PageIntro>
+  return <div className="portal-page page-width"><PageIntro eyebrow="Administration" title="Indhold, formular og workflows" text="Redigér portaltekster, hjælpetekster, FAQ, links og databehandlerkrav. Administratorrollen har samtidig adgang til sager og D-GITA-behandling."><div className="admin-test-badge"><ShieldCheck size={17} /><span><strong>Admin · servervalideret</strong><small>{viewer.displayName}</small></span></div></PageIntro>
     <div className="admin-mode-note"><Info size={18} /><p>Ændringer gemmes i portalens database med administratoridentitet og auditspor. Testrollen erstattes senere af kommunal SSO.</p><button className="line-button" type="button" disabled={resetting} onClick={() => { setResetting(true); void onResetContent().then((saved) => { if (saved) onToast("Standardindholdet er gendannet."); }).finally(() => setResetting(false)); }}><RotateCcw size={16} /> {resetting ? "Gendanner…" : "Gendan standard"}</button></div>
     <nav className="admin-nav" aria-label="Adminområder">{tabs.map(([id, label]) => <button className={tab === id ? "active" : ""} type="button" key={id} onClick={() => setTab(id)}>{label}</button>)}</nav>
     {isContentTab ? <ContentManager category={tab as ContentCategory} content={content} onUpdate={onUpdateContent} onAdd={onAddContent} onRemove={onRemoveContent} onToast={onToast} /> : null}

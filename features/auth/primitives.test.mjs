@@ -14,7 +14,7 @@ import {
   parseCookie,
   readSessionToken,
   sessionCookie,
-  verifyDemoAccessCode,
+  verifyTestAccessCode,
 } from "./primitives.ts";
 import { readOidcProviderConfig } from "./providers.ts";
 
@@ -60,7 +60,7 @@ test("testlogin er kun aktivt lokalt eller med eksplicit flag", () => {
   assert.equal(
     isDevLoginEnabled("https://portal.example.dk", {
       DGITA_ENABLE_DEV_LOGIN: "true",
-      DGITA_DEMO_ACCESS_SECRET: "x".repeat(32),
+      DGITA_TEST_ACCESS_SECRET: "x".repeat(8),
     }),
     true,
   );
@@ -72,7 +72,7 @@ test("testlogin er kun aktivt lokalt eller med eksplicit flag", () => {
   );
 });
 
-test("offentlig demo kræver en konfigureret adgangskode", async () => {
+test("offentligt testmiljø kræver en konfigureret adgangskode", async () => {
   assert.deepEqual(devLoginPolicy("http://localhost:3000", {}), {
     enabled: true,
     accessCodeRequired: false,
@@ -81,7 +81,7 @@ test("offentlig demo kræver en konfigureret adgangskode", async () => {
   assert.deepEqual(
     devLoginPolicy("https://portal.example.dk", {
       DGITA_ENABLE_DEV_LOGIN: "true",
-      DGITA_DEMO_ACCESS_SECRET: "for-kort",
+      DGITA_TEST_ACCESS_SECRET: "kort",
     }),
     {
       enabled: false,
@@ -92,27 +92,51 @@ test("offentlig demo kræver en konfigureret adgangskode", async () => {
   assert.equal(
     devLoginPolicy("https://portal.example.dk", {
       DGITA_ENABLE_DEV_LOGIN: "true",
-      DGITA_DEMO_ACCESS_SECRET: " ".repeat(32),
+      DGITA_TEST_ACCESS_SECRET: " ".repeat(8),
     }).configurationValid,
     false,
   );
 
   const environment = {
     DGITA_ENABLE_DEV_LOGIN: "true",
-    DGITA_DEMO_ACCESS_SECRET: "demo-access-secret-with-32-characters",
+    DGITA_TEST_ACCESS_SECRET: "Parti3411",
   };
   assert.equal(
-    await verifyDemoAccessCode(
-      "demo-access-secret-with-32-characters",
+    await verifyTestAccessCode(
+      "Parti3411",
       environment,
     ),
     true,
   );
-  assert.equal(await verifyDemoAccessCode("forkert", environment), false);
-  assert.equal(await verifyDemoAccessCode(undefined, environment), false);
+  assert.equal(await verifyTestAccessCode("forkert", environment), false);
+  assert.equal(await verifyTestAccessCode(undefined, environment), false);
+
+  assert.equal(
+    await verifyTestAccessCode("legacykode", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_DEMO_ACCESS_SECRET: "legacykode",
+    }),
+    true,
+  );
+  assert.equal(
+    await verifyTestAccessCode("Parti3411", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_TEST_ACCESS_SECRET: "Parti3411",
+      DGITA_DEMO_ACCESS_SECRET: "legacykode",
+    }),
+    true,
+  );
+  assert.equal(
+    await verifyTestAccessCode("legacykode", {
+      DGITA_ENABLE_DEV_LOGIN: "true",
+      DGITA_TEST_ACCESS_SECRET: "Parti3411",
+      DGITA_DEMO_ACCESS_SECRET: "legacykode",
+    }),
+    false,
+  );
 });
 
-test("kun de tre aftalte demo-roller accepteres", () => {
+test("kun de tre aftalte testroller accepteres", () => {
   assert.equal(isWorkspaceRole("user"), true);
   assert.equal(isWorkspaceRole("consultant"), true);
   assert.equal(isWorkspaceRole("admin"), true);

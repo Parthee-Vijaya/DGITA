@@ -1,12 +1,12 @@
 import { AuthHttpError } from "./http";
 import {
   devLoginPolicy,
-  verifyDemoAccessCode,
+  verifyTestAccessCode,
   type AuthEnvironment,
 } from "./primitives";
 import type { AuthProvider } from "./types";
 
-export async function assertDemoLoginAccess(
+export async function assertTestLoginAccess(
   requestUrl: string | URL,
   environment: AuthEnvironment,
   accessCode: string | undefined,
@@ -16,26 +16,26 @@ export async function assertDemoLoginAccess(
   if (!policy.configurationValid) {
     throw new AuthHttpError(
       503,
-      "DEV_LOGIN_CONFIGURATION_ERROR",
+      "TEST_LOGIN_CONFIGURATION_ERROR",
       "Testlogin mangler en gyldig serverkonfiguration.",
     );
   }
   if (!policy.enabled) {
     throw new AuthHttpError(
       403,
-      "DEV_LOGIN_DISABLED",
+      "TEST_LOGIN_DISABLED",
       "Testlogin er ikke aktiveret i dette miljø.",
     );
   }
   if (
     policy.accessCodeRequired &&
     currentProvider !== "dev" &&
-    !(await verifyDemoAccessCode(accessCode, environment))
+    !(await verifyTestAccessCode(accessCode, environment))
   ) {
     throw new AuthHttpError(
       403,
-      "INVALID_DEMO_ACCESS_CODE",
-      "Demo-adgangskoden er ikke korrekt.",
+      "INVALID_TEST_ACCESS_CODE",
+      "Testadgangskoden er ikke korrekt.",
     );
   }
 

@@ -3,7 +3,7 @@ const seedPromises = new WeakMap<object, Map<string, Promise<void>>>();
 export const PORTAL_DEFAULT_SEED = {
   tenantId: "kalundborg",
   scope: "demo-defaults",
-  version: "2026-08-30-v1",
+  version: "2026-08-30-v2",
 } as const;
 
 type SeedIdentity = {
@@ -13,7 +13,7 @@ type SeedIdentity = {
 };
 
 /**
- * Runs the idempotent demo seed once per schema version and records completion
+ * Runs the idempotent test seed once per schema version and records completion
  * in SQL. The in-process promise also coalesces concurrent requests in one
  * warm runtime; the durable marker avoids repeating the seed after cold starts.
  */

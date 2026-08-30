@@ -17,7 +17,7 @@
 
 .accessCodeInput:focus-within {
   border-color: var(--forest);
-  box-shadow: 0 0 0 3px rgb(30 78 65 / 12%);
+  box-shadow: 0 0 0 3px rgb(188 77 48 / 14%);
 }
 
 .accessCodeInput input {

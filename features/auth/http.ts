@@ -3,16 +3,19 @@ import type { AuthEnvironment } from "./primitives";
 export class AuthHttpError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly headers?: HeadersInit;
 
   constructor(
     status: number,
     code: string,
     message: string,
+    headers?: HeadersInit,
   ) {
     super(message);
     this.name = "AuthHttpError";
     this.status = status;
     this.code = code;
+    this.headers = headers;
   }
 }
 
@@ -101,7 +104,7 @@ export function authErrorResponse(error: unknown) {
   if (error instanceof AuthHttpError) {
     return noStoreJson(
       { code: error.code, error: error.message },
-      { status: error.status },
+      { status: error.status, headers: error.headers },
     );
   }
 

@@ -177,16 +177,17 @@ p {
 }
 
 .brand-product-mark {
-  width: 38px;
-  height: 30px;
-  display: grid;
+  width: 32px;
+  height: 32px;
+  display: block;
   flex: 0 0 auto;
-  place-items: center;
-  background: var(--brand-primary);
-  color: white;
-  font-size: 11px;
-  font-weight: 780;
-  letter-spacing: -.08em;
+}
+
+.brand-product-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .brand-product-copy {
@@ -213,9 +214,7 @@ p {
 }
 
 .brand-product-logo-inverse .brand-product-mark {
-  border: 1px solid rgb(255 255 255 / 52%);
-  background: rgb(255 255 255 / 12%);
-  backdrop-filter: blur(12px);
+  filter: drop-shadow(0 2px 8px rgb(0 0 0 / 28%));
 }
 
 .brand-product-logo-inverse .brand-product-copy strong {
@@ -239,9 +238,8 @@ p {
 }
 
 .login-wordmark .brand-product-mark {
-  width: clamp(38px, 11vw, 46px);
-  height: clamp(30px, 9vw, 38px);
-  font-size: clamp(11px, 3vw, 13px);
+  width: 40px;
+  height: 40px;
 }
 
 .login-wordmark .brand-product-copy strong {
@@ -942,9 +940,8 @@ button.notice:hover,
 }
 
 .approval-visual .brand-product-mark {
-  width: 46px;
-  height: 38px;
-  font-size: 13px;
+  width: 44px;
+  height: 44px;
 }
 
 .approval-visual .brand-product-copy strong {
@@ -5392,9 +5389,8 @@ textarea.clean-input {
   }
 
   .wordmark .brand-product-mark {
-    width: 36px;
-    height: 28px;
-    font-size: 10px;
+    width: 30px;
+    height: 30px;
   }
 
   .wordmark .brand-product-copy strong {
@@ -6392,7 +6388,7 @@ textarea.clean-input {
   }
 
   .wordmark .brand-product-mark {
-    width: 36px;
+    width: 30px;
     height: 30px;
   }
 

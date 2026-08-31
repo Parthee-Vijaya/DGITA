@@ -11,7 +11,18 @@ export function DgitaLogo({ tone = "default" }: BrandLockupProps) {
       role="img"
       aria-label="D-GITA – Den Gode IT-Anskaffelse"
     >
-      <span className="brand-product-mark" aria-hidden="true">D–G</span>
+      <span className="brand-product-mark" aria-hidden="true">
+        <Image
+          src={
+            tone === "inverse"
+              ? "/brand/dgita-mark-inverse.svg"
+              : "/brand/dgita-mark.svg"
+          }
+          width={64}
+          height={64}
+          alt=""
+        />
+      </span>
       <span className="brand-product-copy" aria-hidden="true">
         <strong>D-GITA</strong>
         <small>Den Gode IT-Anskaffelse</small>

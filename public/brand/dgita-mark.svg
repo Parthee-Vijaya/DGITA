@@ -1,0 +1,7 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>D-GITA – beslutningsporten</title>
+  <path d="M11 53V22L32 10L53 22V53" stroke="#BC4D30" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M11 51C23 51 28 46 24 39C20 31 27 25 39 25" stroke="#006F71" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="44" cy="25" r="10" fill="#BC4D30" stroke="white" stroke-width="2.5"/>
+  <path d="M39 25L43 29L50 21" stroke="white" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

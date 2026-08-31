@@ -77,8 +77,14 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.doesNotMatch(portal, /SkeletonPreview/);
   assert.match(portal, /<PartnerFooter \/>/);
-  assert.match(brandLockup, />D–G<\/span>/);
+  assert.match(brandLockup, /dgita-mark\.svg/);
+  assert.match(brandLockup, /dgita-mark-inverse\.svg/);
+  assert.doesNotMatch(brandLockup, />D–G<\/span>/);
   assert.doesNotMatch(brandLockup, /digit\.svg/i);
   assert.match(partnerFooter, /digit\.svg/i);
+  await Promise.all([
+    access(new URL("../public/brand/dgita-mark.svg", import.meta.url)),
+    access(new URL("../public/brand/dgita-mark-inverse.svg", import.meta.url)),
+  ]);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
 });

@@ -36,6 +36,10 @@ test("server-renderer D-GITA-login og beskytter portalen", async () => {
   assert.match(html, /Log ind på D-GITA/);
   assert.match(html, /Microsoft Entra ID/);
   assert.match(html, /Fælleskommunal Adgangsstyring/);
+  assert.match(html, /site-partner-footer/);
+  assert.match(html, /Udviklet i samarbejde med/);
+  assert.match(html, /\/brand\/digit\.svg/);
+  assert.match(html, /digitaliseringsforeningen\.dk/);
   assert.match(html, /og:image[^>]+http:\/\/localhost:3000\/og-editorial\.png/i);
 
   const protectedResponse = await render("/");
@@ -47,7 +51,7 @@ test("server-renderer D-GITA-login og beskytter portalen", async () => {
 });
 
 test("indeholder roller, workflows og ingen starter-preview", async () => {
-  const [page, portal, form, applicationRepository, layout, css, packageJson] = await Promise.all([
+  const [page, portal, form, applicationRepository, layout, css, packageJson, brandLockup, partnerFooter] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/PortalClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../features/application/ApplicationFormView.tsx", import.meta.url), "utf8"),
@@ -55,6 +59,8 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../features/brand/BrandLockup.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../features/brand/PartnerFooter.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /redirect\("\/login"\)/);
@@ -70,5 +76,9 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.match(css, /@media \(max-width: 540px\)/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.doesNotMatch(portal, /SkeletonPreview/);
+  assert.match(portal, /<PartnerFooter \/>/);
+  assert.match(brandLockup, />D–G<\/span>/);
+  assert.doesNotMatch(brandLockup, /digit\.svg/i);
+  assert.match(partnerFooter, /digit\.svg/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
 });

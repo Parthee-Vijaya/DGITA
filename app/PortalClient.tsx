@@ -45,6 +45,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useRouter } from "next/navigation";
 import type { Actor } from "../features/auth/types";
 import { BrandLockup } from "../features/brand/BrandLockup";
+import { PartnerFooter } from "../features/brand/PartnerFooter";
 import { ApplicationFormView } from "../features/application/ApplicationFormView";
 import {
   formatDanishAmount,
@@ -551,6 +552,8 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
           />
         ) : null}
       </main>
+
+      <PartnerFooter />
 
       {toast ? (
         <div className="site-toast" role="status">

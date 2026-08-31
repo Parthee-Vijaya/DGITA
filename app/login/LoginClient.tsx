@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { BrandLockup } from "../../features/brand/BrandLockup";
+import { PartnerFooter } from "../../features/brand/PartnerFooter";
 import type { WorkspaceRole } from "../../features/workspace/model";
 import styles from "./LoginClient.module.css";
 
@@ -172,6 +173,8 @@ export function LoginClient() {
           <div className="login-privacy"><LockKeyhole size={16} /><p>Login og adgang kontrolleres på serveren. Rollen kan ikke ændres ved at manipulere browseren.</p></div>
         </div>
       </section>
+
+      <PartnerFooter className="login-partner-footer" />
     </main>
   );
 }

@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 
 import type { PublicApprovalRequest } from "../../../features/approval/server";
+import { DgitaLogo } from "../../../features/brand/BrandLockup";
 
 export function ApprovalDecisionClient({
   token,
@@ -52,7 +53,7 @@ export function ApprovalDecisionClient({
   return (
     <main className="approval-shell">
       <section className="approval-visual" aria-label="D-GITA">
-        <div><span>D</span><strong>D-GITA</strong><small>Den Gode IT-Anskaffelse</small></div>
+        <DgitaLogo tone="inverse" />
         <blockquote>Én versionslåst ansøgning. Ét tydeligt beslutningsgrundlag.</blockquote>
       </section>
       <section className="approval-card">

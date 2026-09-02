@@ -37,6 +37,7 @@ import {
   ShieldCheck,
   Trash2,
   UserCheck,
+  UserRound,
   X,
   XCircle,
   type LucideIcon,
@@ -1202,13 +1203,15 @@ function CaseOverview({ item, detail, canRequestApproval, approvalRequesting, on
   const architectureReady = snapshot.hasArchitecture === "ja";
   const marketReady = snapshot.marketResearch === "ja";
   const implementation = [formatCaseDate(snapshot.startDate), formatCaseDate(snapshot.endDate)].filter(Boolean).join(" – ") || "Ikke oplyst";
-  const leader = snapshot.approvingLeader || item.leader || "Ikke valgt";
+  const consultant = metadata.consultantName?.trim() || null;
+  const storedLeader = snapshot.approvingLeader?.trim() || item.leader?.trim() || "";
+  const leader = storedLeader && !["Ikke valgt", "Ikke tildelt", "–"].includes(storedLeader) ? storedLeader : null;
   return <div className="case-content-grid"><div className="case-primary">
     {!architectureReady ? <section className="attention-block"><span><Info size={22} /></span><div><small>Opmærksomhedspunkt</small><h2>Arkitekturtegning mangler</h2><p>Ansøgeren har oplyst, at der endnu ikke er indhentet en arkitekturtegning. Brug den feltvise dialog til at bede om dokumentation; et afvist beslutningsgrundlag kan rettes og indsendes som en ny version.</p></div></section> : null}
     <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Ansøgningen</span><h2>Nøgleoplysninger</h2></div><div className="facts-grid"><Fact label="Anskaffelsesform" value={snapshot.acquisitionMethod || snapshot.acquisitionType} /><Fact label="Ansvarlig organisation" value={snapshot.responsibleOrganization || snapshot.department} /><Fact label="Dataklassifikation" value={snapshot.personalData === "ja" ? snapshot.dataClassification : "Ingen personoplysninger"} /><Fact label="Antal brugere" value={snapshot.implementationUsers || "Ikke oplyst"} /><Fact label="Implementering" value={implementation} /><Fact label="Samlet finansiering" value={`${formatDanishAmount(getFinanceTotal(snapshot))} kr.`} /></div></section>
     <section className="plain-section"><div className="plain-heading"><span className="section-label dark">Faglig vurdering</span><h2>To centrale kontroller</h2></div><div className="assessment-list"><div className={cx("assessment", marketReady ? "ok" : "missing")}>{marketReady ? <CheckCircle2 size={21} /> : <XCircle size={21} />}<div><strong>{marketReady ? "Markedsafdækning gennemført" : "Markedsafdækning ikke gennemført"}</strong><p>Spørgsmål 26 er besvaret {marketReady ? "ja" : "nej"}.</p></div></div><div className={cx("assessment", architectureReady ? "ok" : "missing")}>{architectureReady ? <CheckCircle2 size={21} /> : <XCircle size={21} />}<div><strong>{architectureReady ? "Arkitekturbeskrivelse registreret" : "Arkitekturbeskrivelse mangler"}</strong><p>Spørgsmål 50 er besvaret {architectureReady ? "ja" : "nej"}.</p></div></div></div></section>
   </div><aside className="case-aside">
-    <section><span className="section-label dark">Ansvar</span><h3>Personer på sagen</h3><Person name={metadata.applicantName} role="Anmoder" initials={personInitials(metadata.applicantName)} /><Person name={metadata.consultantName || "Ikke tildelt"} role="D-GITA Konsulent" initials={personInitials(metadata.consultantName)} /><Person name={leader} role="Godkendende leder" initials={personInitials(leader)} /></section>
+    <section><span className="section-label dark">Ansvar</span><h3>Personer på sagen</h3><Person name={metadata.applicantName} role="Anmoder" initials={personInitials(metadata.applicantName)} /><Person name={consultant || "Ikke tildelt"} role="D-GITA Konsulent" initials={consultant ? personInitials(consultant) : ""} unassigned={!consultant} /><Person name={leader || "Ikke valgt"} role="Godkendende leder" initials={leader ? personInitials(leader) : ""} unassigned={!leader} /></section>
     <section><span className="section-label dark">Godkendelse</span><h3>Ledergodkendelse</h3><ApprovalTag approval={item.approval} /><p>En beslutning bindes altid til den konkrete, indsendte version af ansøgningen.</p>{canRequestApproval ? <button className="line-button full" type="button" disabled={approvalRequesting} onClick={onRequestApproval}><Mail size={17} /> {approvalRequesting ? "Opretter…" : item.approval === "Afventer" ? "Send nyt godkendelseslink" : "Send til ledergodkendelse"}</button> : null}</section>
     <section><span className="section-label dark">Sagsdata</span><dl><div><dt>Version</dt><dd>{metadata.versionNumber || "Kladde"}</dd></div><div><dt>Oprettet</dt><dd>{formatFeedDate(metadata.createdAt)}</dd></div><div><dt>Ændret</dt><dd>{formatFeedDate(metadata.updatedAt)}</dd></div><div><dt>Kommune</dt><dd>{item.municipality}</dd></div><div><dt>ESDH</dt><dd>{snapshot.esdhContractUrl && isSafeContentUrl(snapshot.esdhContractUrl) ? <a href={snapshot.esdhContractUrl} target="_blank" rel="noreferrer">Åbn reference</a> : "Ikke angivet"}</dd></div></dl></section>
   </aside></div>;
@@ -1218,8 +1221,8 @@ function Fact({ label, value }: { label: string; value: string }) {
   return <div className="fact"><small>{label}</small><strong>{value}</strong></div>;
 }
 
-function Person({ name, role, initials }: { name: string; role: string; initials: string }) {
-  return <div className="case-person"><span>{initials}</span><div><strong>{name}</strong><small>{role}</small></div></div>;
+function Person({ name, role, initials, unassigned = false }: { name: string; role: string; initials: string; unassigned?: boolean }) {
+  return <div className={cx("case-person", unassigned && "unassigned")}><span aria-hidden="true">{unassigned ? <UserRound size={16} /> : initials}</span><div><strong>{name}</strong><small>{role}</small></div></div>;
 }
 
 function ApplicationSnapshot({

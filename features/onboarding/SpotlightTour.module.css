@@ -26,7 +26,7 @@
   position: fixed;
   z-index: 1;
   border: 2px solid #d47055;
-  border-radius: 14px;
+  border-radius: 4px;
   box-shadow:
     0 0 0 9999px rgb(37 37 37 / 72%),
     0 0 0 5px rgb(188 77 48 / 24%),
@@ -42,8 +42,9 @@
   max-height: calc(100vh - 32px);
   overflow: auto;
   padding: 25px;
-  border: 1px solid rgb(188 77 48 / 18%);
-  border-radius: 18px;
+  border: 1px solid #c8cdd3;
+  border-top: 4px solid #923b25;
+  border-radius: 4px;
   background: #fff;
   box-shadow: 0 22px 70px rgb(0 0 0 / 28%);
   pointer-events: auto;
@@ -71,9 +72,9 @@
   height: 34px;
   padding: 0;
   place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: #f8edea;
+  border: 1px solid #c8cdd3;
+  border-radius: 2px;
+  background: #f2f3f2;
   color: #464f5e;
   font: inherit;
   font-size: 25px;
@@ -82,7 +83,8 @@
 }
 
 .closeButton:hover {
-  background: #f4e3df;
+  border-color: #7e8792;
+  background: #eceeed;
 }
 
 .closeButton:focus-visible,
@@ -154,9 +156,10 @@
 .missingTarget {
   margin: 15px 0 0;
   padding: 11px 13px;
-  border-radius: 10px;
-  background: #f4f1e8;
-  color: #675d3f;
+  border-left: 3px solid #a47413;
+  border-radius: 0;
+  background: #f5ecd2;
+  color: #594817;
   font-size: 0.82rem;
   line-height: 1.45;
 }
@@ -188,7 +191,7 @@
 .primaryButton {
   min-height: 40px;
   padding: 0 16px;
-  border-radius: 999px;
+  border-radius: 2px;
   font: inherit;
   font-size: 0.88rem;
   font-weight: 720;
@@ -205,9 +208,9 @@
 }
 
 .secondaryButton {
-  border: 1px solid #c4c8ce;
+  border: 1px solid #7e8792;
   background: #fff;
-  color: #464f5e;
+  color: #252525;
 }
 
 .secondaryButton:disabled {
@@ -216,14 +219,14 @@
 }
 
 .primaryButton {
-  border: 1px solid #bc4d30;
-  background: #bc4d30;
+  border: 1px solid #923b25;
+  background: #923b25;
   color: #fff;
 }
 
 .primaryButton:hover {
-  border-color: #9b4028;
-  background: #9b4028;
+  border-color: #742f1e;
+  background: #742f1e;
 }
 
 @media (max-width: 540px) {

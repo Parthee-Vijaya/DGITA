@@ -77,11 +77,16 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.doesNotMatch(portal, /SkeletonPreview/);
   assert.match(portal, /<PartnerFooter \/>/);
+  assert.match(portal, /unassigned=\{!consultant\}/);
+  assert.match(portal, /<UserRound size=\{16\}/);
   assert.match(brandLockup, /dgita-mark\.svg/);
   assert.match(brandLockup, /dgita-mark-inverse\.svg/);
   assert.doesNotMatch(brandLockup, />D–G<\/span>/);
   assert.doesNotMatch(brandLockup, /digit\.svg/i);
   assert.match(partnerFooter, /digit\.svg/i);
+  const desktopJourneyConnector = css.match(/\.case-journey i\s*\{([^}]*)\}/)?.[1] ?? "";
+  assert.match(css, /grid-template-columns:\s*30px max-content minmax\(16px, 1fr\)/);
+  assert.doesNotMatch(desktopJourneyConnector, /position:\s*absolute/);
   await Promise.all([
     access(new URL("../public/brand/dgita-mark.svg", import.meta.url)),
     access(new URL("../public/brand/dgita-mark-inverse.svg", import.meta.url)),

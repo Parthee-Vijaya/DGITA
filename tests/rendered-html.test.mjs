@@ -70,7 +70,8 @@ test("indeholder roller, workflows og ingen starter-preview", async () => {
   assert.match(form, /Gem og indsend/);
   assert.match(portal, /availableRows\.filter/);
   assert.doesNotMatch(portal, /detail="WSUS klient"/);
-  assert.match(portal, /ITA-001284/);
+  assert.match(portal, /const featured = availableRows\[0\]/);
+  assert.doesNotMatch(portal, /availableRows\.find\(.*ITA-001284/);
   assert.match(applicationRepository, /application\.submitted/);
   assert.match(layout, /openGraph/);
   assert.match(css, /@media \(max-width: 540px\)/);

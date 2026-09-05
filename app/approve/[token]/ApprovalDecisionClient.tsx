@@ -68,7 +68,7 @@ export function ApprovalDecisionClient({
             {approvalStatusLabel(approval.status)}
           </span>
         </header>
-        <div className="approval-summary">
+        {open ? <><div className="approval-summary">
           <div><small>System</small><strong>{approval.systemName}</strong></div>
           <div><small>Afdeling</small><strong>{approval.summary.department}</strong></div>
           <div><small>Anskaffelsesform</small><strong>{approval.summary.acquisitionMethod}</strong></div>
@@ -109,6 +109,7 @@ export function ApprovalDecisionClient({
           ) : <p>Der er ikke knyttet bilag til denne version. Den komplette PDF-kvittering følger godkendelsesmailen.</p>}
         </section>
 
+        </> : null}
         {open ? (
           <div className="approval-decision">
             <label>

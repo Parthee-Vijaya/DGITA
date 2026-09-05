@@ -2,7 +2,7 @@
 
 En moderne, webbaseret portal til kommunale IT-anskaffelser. Løsningen samler ansøgning, dokumentation, sagsbehandling, ledergodkendelse, Outlook-mail, PDF-kvitteringer og administration i ét responsivt workspace.
 
-Testsager, roller og personer er fiktive test-fixtures. Kontaktoplysninger fra den eksisterende portal er bevaret som redaktionelt testindhold. Systemkataloget er normaliseret fra de udleverede KITOS- og Kalundborg-regneark og følger med repositoryet som deploybar runtime-data.
+Testsager og dokumentindhold er fiktive test-fixtures; projektgruppens navne og kontaktoplysninger fra den eksisterende portal bruges i test- og vejledningsindhold. Systemkataloget er normaliseret fra de udleverede KITOS- og Kalundborg-regneark og følger med repositoryet som deploybar runtime-data.
 
 ![D-GITA-forsiden](docs/screenshots/home.jpg)
 
@@ -11,6 +11,8 @@ Testsager, roller og personer er fiktive test-fixtures. Kontaktoplysninger fra d
 Portalens primære tema følger Kalundborg Kommunes aktuelle webidentitet med terracotta, varme lyse flader og mørk tekst. Det officielle Kalundborg-logo bruges i lokal SVG-kopi fra kommunens [logo- og designside](https://www.kalundborg.dk/kommunen/presse-og-kommunikation/billeder-logo-og-design). D-GITA vises som produktnavn, mens det separate officielle DIGIT-logo repræsenterer [Digitaliseringsforeningen Sjælland](https://digitaliseringsforeningen.dk/).
 
 ## Status
+
+Seneste [robusthedsgennemgang og produktionscheckliste](docs/enterprise-review.md) beskriver rettelserne i kladder, samtidige redigeringer, statusskift, dokumenter, mail, PDF, admin og UX. Portalen er fortsat et test-/pilotmiljø — ikke en certificeret enterprise-produktionsløsning.
 
 | Område | Status |
 | --- | --- |
@@ -47,7 +49,7 @@ Formularmotoren understøtter blandt andet:
 - upload af risikovurdering, databehandleraftale, kontrakt, leverandørtjekliste og arkitekturmateriale
 - filtype-, MIME- og størrelseskontrol samt SHA-256-registrering; højst 25 MB pr. fil
 - dansk beløbsformat, beregnet finansiering og kontrol af implementeringsdatoer
-- sikre, brugerejede kladder, automatisk fortsættelse og konfliktbeskyttelse mellem parallelle faner
+- sikre, brugerejede kladder med individuel fortsættelse, beskyttelse af ugemte ændringer og konfliktkontrol mellem parallelle faner
 - versionslåst snapshot og bilagsmanifest ved indsendelse
 - rettelse efter afvisning, hvor den tidligere version og kvittering forbliver uforanderlig
 
@@ -242,7 +244,7 @@ Den seneste komplette lokale gennemgang består af:
 
 - produktionsbuild gennem Vinext/Vite
 - native Next.js/Vercel-produktionsbuild
-- 119 beståede enheds- og integrationstests
+- 133 beståede enheds- og integrationstests
 - 75 E2E-kontroller af HTTP/API → D1/R2 → PDF/mail-outbox
 - SQLite `integrity_check` og `foreign_key_check`
 - manuel browsertest af login, roller, ejerskab, formularregler, fuzzy-søgning, D-GITA-felter, admin-editor og tutorial
@@ -254,7 +256,7 @@ Et fuldt `npm audit` rapporterer fire moderate, udviklings-only fund i `drizzle-
 
 Projektet har to persistence-mål:
 
-- **Cloudflare:** Vinext Worker/Sites med D1, privat R2 og Worker-cron. Projektet indeholder worker-entry, bindings og migrationspakning, men `.openai/hosting.json` er endnu ikke koblet til et konkret Sites-projekt-id.
+- **Cloudflare:** Vinext Worker/Sites med D1, privat R2 og Worker-cron. `.openai/hosting.json` er koblet til det eksisterende Sites-projekt. Sites og Vercel har separate databaser; runtime-data flyttes ikke automatisk mellem dem.
 - **Vercel:** Native Next.js-build med Turso/libSQL og privat Vercel Blob. Turso-variablerne, `BLOB_STORE_ID`, portal-origin og secrets ovenfor er obligatoriske; Blob SDK bruger Vercels kortlivede request-context OIDC-token.
 
 `vercel.json` registrerer `GET /api/cron/mail` kl. 06:00 UTC én gang dagligt, som er kompatibelt med Hobby-planen. Vercel sender `CRON_SECRET` som et Bearer-token; endpointet afviser både manglende konfiguration og alle ikke-eksakte tokens. Cronjobbet behandler mailkøen og rydder sikkert op i udløbne upload-verifikationer. Cronjobs kører kun på production deployments. Ved hastesager kan en Admin fortsat vælge **Behandl kø** i mailadministrationen. Både cron og manuel mailbehandling kræver en færdig Microsoft Graph-konfiguration for at kunne sende.

@@ -25,6 +25,8 @@ import {
 } from "react";
 
 import type { CatalogSystem } from "../catalog/search";
+import { useUnsavedChanges } from "./use-unsaved-changes";
+import { labelQuestionControls } from "./QuestionContent";
 import {
   isAllowedPrivateBlobUrl,
   isAllowedVercelBlobUploadUrl,
@@ -110,6 +112,7 @@ type Props = {
   ) => void;
   onToast: (message: string) => void;
   correctionCaseNumber?: string | null;
+  draftCaseNumber?: string | null;
   guidance?: {
     intro?: string;
     catalog?: string;
@@ -123,6 +126,7 @@ export function ApplicationFormView({
   onToast,
   guidance,
   correctionCaseNumber = null,
+  draftCaseNumber = null,
 }: Props) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ApplicationFormState>(() =>
@@ -138,6 +142,12 @@ export function ApplicationFormView({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [correction, setCorrection] = useState<CorrectionContext | null>(null);
   const [activeUploads, setActiveUploads] = useState(0);
+  const activeUploadsRef = useRef(0);
+  const [pendingSaves, setPendingSaves] = useState(0);
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const submittingRef = useRef(false);
+  const [savedFingerprint, setSavedFingerprint] = useState(() => JSON.stringify(initialApplicationState));
+  const clearUnsavedGuard = useUnsavedChanges(JSON.stringify(form) !== savedFingerprint, pendingSaves > 0 || activeUploads > 0);
   const draftIdRef = useRef<string | null>(null);
   const rowVersionRef = useRef<number | null>(null);
   const formRef = useRef(form);
@@ -159,6 +169,12 @@ export function ApplicationFormView({
     setActiveUploads(0);
     setLoadError(null);
     setSaveStatus("loading");
+    if (!correctionCaseNumber && !draftCaseNumber) {
+      draftIdRef.current = crypto.randomUUID();
+      setSavedFingerprint(JSON.stringify(emptyState));
+      setSaveStatus("idle");
+      return () => controller.abort();
+    }
     void (async () => {
       try {
         const response = correctionCaseNumber
@@ -172,7 +188,7 @@ export function ApplicationFormView({
               cache: "no-store",
               signal: controller.signal,
             })
-          : await fetch("/api/drafts", {
+          : await fetch(`/api/drafts?caseNumber=${encodeURIComponent(draftCaseNumber!)}`, {
               cache: "no-store",
               signal: controller.signal,
             });
@@ -199,6 +215,7 @@ export function ApplicationFormView({
           rowVersionRef.current = payload.draft.rowVersion;
           formRef.current = restoredState;
           setForm(restoredState);
+          setSavedFingerprint(JSON.stringify(restoredState));
           if (
             payload.draft.mode === "correction" &&
             typeof payload.draft.currentVersionNumber === "number" &&
@@ -212,7 +229,7 @@ export function ApplicationFormView({
             });
           }
           setSaveStatus("saved");
-        } else if (correctionCaseNumber) {
+        } else if (correctionCaseNumber || draftCaseNumber) {
           throw new Error("Sagen kunne ikke åbnes til rettelser.");
         } else {
           draftIdRef.current = crypto.randomUUID();
@@ -228,7 +245,7 @@ export function ApplicationFormView({
       }
     })();
     return () => controller.abort();
-  }, [correctionCaseNumber]);
+  }, [correctionCaseNumber, draftCaseNumber]);
 
   useEffect(() => {
     const query = form.catalogQuery.trim();
@@ -286,6 +303,7 @@ export function ApplicationFormView({
   function changeForm(
     updater: (current: ApplicationFormState) => ApplicationFormState,
   ) {
+    if (submittingRef.current) return formRef.current;
     const next = updater(formRef.current);
     formRef.current = next;
     setForm(next);
@@ -296,6 +314,11 @@ export function ApplicationFormView({
     status: "draft" | "submitted" = "draft",
     state: ApplicationFormState = formRef.current,
   ) {
+    const previous = saveQueueRef.current;
+    let release!: () => void;
+    saveQueueRef.current = new Promise<void>((resolve) => { release = resolve; });
+    setPendingSaves((count) => count + 1);
+    await previous;
     const id = draftIdRef.current ?? crypto.randomUUID();
     draftIdRef.current = id;
     setSaveStatus("saving");
@@ -329,11 +352,15 @@ export function ApplicationFormView({
       }
 
       rowVersionRef.current = payload.rowVersion!;
-      setSaveStatus("saved");
+      setSavedFingerprint(JSON.stringify(state));
+      setSaveStatus(JSON.stringify(formRef.current) === JSON.stringify(state) ? "saved" : "idle");
       return { ...payload, id: payload.id ?? id };
     } catch (error) {
       setSaveStatus("error");
       throw error;
+    } finally {
+      setPendingSaves((count) => count - 1);
+      release();
     }
   }
 
@@ -390,8 +417,8 @@ export function ApplicationFormView({
       ...current,
       selectedSystem: selection,
       catalogQuery: system.name,
-      supplier: current.supplier || system.supplier,
-      rightsHolder: current.rightsHolder || system.rightsHolder,
+      supplier: system.supplier,
+      rightsHolder: system.rightsHolder,
       manualCatalogEntry: false,
       existsInKitos: "ja",
       municipalityAlreadyUsesSystem:
@@ -431,10 +458,15 @@ export function ApplicationFormView({
     );
     if (validFiles.length === 0) return;
 
+    activeUploadsRef.current += validFiles.length;
+    setActiveUploads(activeUploadsRef.current);
+
     let activeDraftId: string;
     try {
       activeDraftId = (await persistDraft("draft", stateWithIncoming)).id;
     } catch (error) {
+      activeUploadsRef.current -= validFiles.length;
+      setActiveUploads(activeUploadsRef.current);
       const message = (error as Error).message;
       changeForm((current) => ({
         ...current,
@@ -450,7 +482,6 @@ export function ApplicationFormView({
       return;
     }
 
-    setActiveUploads((current) => current + validFiles.length);
     for (const { file, attachment: pending } of validFiles) {
       let uploadedAttachment: AttachmentDraft | null = null;
       let directAttachmentId: string | null = null;
@@ -578,7 +609,8 @@ export function ApplicationFormView({
           }),
         );
       } finally {
-        setActiveUploads((current) => Math.max(0, current - 1));
+        activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+        setActiveUploads(activeUploadsRef.current);
       }
     }
   }
@@ -612,7 +644,8 @@ export function ApplicationFormView({
   }
 
   async function submit() {
-    if (activeUploads > 0) {
+    if (submittingRef.current) return;
+    if (activeUploadsRef.current > 0) {
       onToast("Vent på, at alle bilag er uploadet, før du indsender.");
       return;
     }
@@ -625,6 +658,7 @@ export function ApplicationFormView({
       onToast("Ansøgningen mangler oplysninger, før den kan indsendes.");
       return;
     }
+    submittingRef.current = true;
     try {
       const result = await persistDraft("submitted", currentForm);
       if (
@@ -637,6 +671,7 @@ export function ApplicationFormView({
       ) {
         throw new Error("Serveren returnerede ikke den indsendte version.");
       }
+      clearUnsavedGuard();
       onSubmit(pruneHiddenAnswers(currentForm), {
         id: result.id,
         caseNumber: result.caseNumber,
@@ -648,6 +683,8 @@ export function ApplicationFormView({
       });
     } catch (error) {
       onToast((error as Error).message);
+    } finally {
+      submittingRef.current = false;
     }
   }
 
@@ -671,11 +708,11 @@ export function ApplicationFormView({
           <button className="back-text" type="button" onClick={onBack}>
             <ArrowLeft size={18} /> {correctionCaseNumber ? "Tilbage til sagen" : "Mine ansøgninger"}
           </button>
-          <span><Check size={16} /> {correctionCaseNumber ? "Henter sag til rettelser…" : "Henter seneste kladde…"}</span>
+          <span><Check size={16} /> {correctionCaseNumber ? "Henter sag til rettelser…" : "Henter kladde…"}</span>
         </div>
         <div className="form-message warning" role="status">
           <Info size={20} />
-          <div><strong>{correctionCaseNumber ? "Klargør næste version" : "Klargør formularen"}</strong><p>{correctionCaseNumber ? "Formular og bilag hentes sikkert fra den afviste version." : "Vi kontrollerer, om du allerede har en gemt kladde."}</p></div>
+          <div><strong>{correctionCaseNumber ? "Klargør næste version" : "Klargør formularen"}</strong><p>{correctionCaseNumber ? "Formular og bilag hentes sikkert fra den afviste version." : "Vi henter den valgte kladde fra din konto."}</p></div>
         </div>
       </div>
     );
@@ -703,12 +740,12 @@ export function ApplicationFormView({
         <button className="back-text" type="button" onClick={onBack}>
           <ArrowLeft size={18} /> {correction ? "Tilbage til sagen" : "Mine ansøgninger"}
         </button>
-        <span><Check size={16} /> {saveStatusText(saveStatus, Boolean(correctionCaseNumber))}</span>
+        <span><Check size={16} /> {saveStatusText(pendingSaves > 0 ? "saving" : JSON.stringify(form) !== savedFingerprint && saveStatus === "saved" ? "idle" : saveStatus, Boolean(correctionCaseNumber))}</span>
       </div>
       <div className="application-title">
         <div>
           <span className="section-label dark">{correction ? `${correction.caseNumber} · Version ${correction.nextVersionNumber}` : "Ny IT-anskaffelse"}</span>
-          <h1>{correction ? "Ret og genindsend ansøgning" : "Opret ansøgning"}</h1>
+          <h1>{correction ? "Ret og genindsend ansøgning" : draftCaseNumber ? "Fortsæt kladde" : "Opret ansøgning"}</h1>
           <p>{correction ? `Version ${correction.currentVersionNumber} forbliver låst. Dine rettelser gemmes som en ny version, når du genindsender.${correction.rejection?.comment ? ` Afvisningsgrund fra ${correction.rejection.approverName}: ${correction.rejection.comment}` : ""}` : guidance?.intro ?? "Spørgsmålene følger D-GITA-processen og tilpasses dine svar undervejs."}</p>
         </div>
         <div className="application-progress"><strong>{step + 1}</strong><span>af {steps.length}</span></div>
@@ -992,10 +1029,10 @@ export function ApplicationFormView({
           </div>
 
           <div className="sheet-footer">
-            <button className="line-button" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void saveDraft()}>{activeUploads > 0 ? "Uploader bilag…" : saveStatus === "saving" ? "Gemmer…" : correction ? "Gem rettelser" : "Gem kladde"}</button>
+            <button className="line-button" type="button" disabled={pendingSaves > 0 || activeUploads > 0} onClick={() => void saveDraft()}>{activeUploads > 0 ? "Uploader bilag…" : saveStatus === "saving" ? "Gemmer…" : correction ? "Gem rettelser" : "Gem kladde"}</button>
             <div>
               {step > 0 ? <button className="text-nav-button" type="button" onClick={() => goToStep(step - 1)}><ArrowLeft size={17} /> Forrige</button> : null}
-              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button" type="button" disabled={saveStatus === "saving" || activeUploads > 0} onClick={() => void submit()}><Send size={17} /> {activeUploads > 0 ? "Uploader bilag…" : correction ? `Genindsend version ${correction.nextVersionNumber}` : "Gem og indsend"}</button>}
+              {step < steps.length - 1 ? <button className="solid-button" type="button" onClick={continueForm}>Fortsæt <ArrowRight size={17} /></button> : <button className="solid-button" type="button" disabled={pendingSaves > 0 || activeUploads > 0} onClick={() => void submit()}><Send size={17} /> {activeUploads > 0 ? "Uploader bilag…" : correction ? `Genindsend version ${correction.nextVersionNumber}` : "Gem og indsend"}</button>}
             </div>
           </div>
         </section>
@@ -1011,11 +1048,11 @@ function saveStatusText(
   correction: boolean,
 ) {
   const noun = correction ? "rettelser" : "kladde";
-  if (status === "loading") return correction ? "Henter sag til rettelser…" : "Henter seneste kladde…";
+  if (status === "loading") return correction ? "Henter sag til rettelser…" : "Henter kladde…";
   if (status === "saving") return `Gemmer ${noun}…`;
   if (status === "saved") return `${correction ? "Rettelserne" : "Kladden"} er gemt sikkert`;
   if (status === "error") return `${correction ? "Rettelser" : "Kladde"} kunne ikke hentes eller gemmes`;
-  return "Klar til at gemme";
+  return "Ændringer gemmes først, når du vælger Gem kladde";
 }
 
 function replaceAttachment(
@@ -1045,7 +1082,7 @@ function splitList(value: string) {
 
 function Question({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   const titleId = useId();
-  return <div className="question" role="group" aria-labelledby={titleId}><div className="question-copy"><div className="question-title" id={titleId}>{title}</div>{hint ? <p>{hint}</p> : null}</div><div>{children}</div></div>;
+  return <div className="question" role="group" aria-labelledby={titleId}><div className="question-copy"><div className="question-title" id={titleId}>{title}</div>{hint ? <p>{hint}</p> : null}</div><div>{labelQuestionControls(children, title)}</div></div>;
 }
 
 function Choice({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {

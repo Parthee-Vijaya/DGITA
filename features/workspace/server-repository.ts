@@ -22,6 +22,8 @@ import {
   normalizeDgitaApprovalInput,
   normalizeFieldCommentInput,
   normalizeWorkspaceCaseId,
+  normalizeContentInput,
+  normalizeImageInput,
 } from "./validation";
 import { ensureVersionedSeed, PORTAL_DEFAULT_SEED } from "./seed-guard";
 
@@ -64,6 +66,9 @@ type StoredContentRow = {
 };
 
 type StoredApprovalRow = {
+  updated_at: string | null;
+  row_version: number;
+  phase: DgitaApproval["phase"];
   case_number: string;
   internal_fields_json: string;
 };
@@ -234,12 +239,12 @@ export async function getWorkspaceForActor(actor: PortalActor) {
   let approvals: Record<string, DgitaApproval> = {};
   if (actor.role !== "user") {
     const approvalRows = await DB.prepare(`
-      SELECT a.case_number, approval.internal_fields_json
-      FROM portal_dgita_approvals approval
-      INNER JOIN portal_applications a
+      SELECT a.case_number, a.row_version, a.phase, approval.internal_fields_json, approval.updated_at
+      FROM portal_applications a
+      LEFT JOIN portal_dgita_approvals approval
         ON a.id = approval.application_id AND a.tenant_id = approval.tenant_id
-      WHERE approval.tenant_id = ?
-        AND approval.application_version_id = a.current_version_id
+        AND approval.application_version_id IS a.current_version_id
+      WHERE a.tenant_id = ?
       ORDER BY approval.updated_at
     `)
       .bind(actor.tenantId)
@@ -247,7 +252,7 @@ export async function getWorkspaceForActor(actor: PortalActor) {
     approvals = Object.fromEntries(
       approvalRows.results.flatMap((row) => {
         const parsed = parseJson<DgitaApproval>(row.internal_fields_json);
-        return parsed ? [[row.case_number, normalizeDgitaApproval(parsed)]] : [];
+        return [[row.case_number, { ...normalizeDgitaApproval(parsed ?? { ...EMPTY_D_GITA_APPROVAL, phase: row.phase }), updatedAt: row.updated_at ?? undefined, revision: row.row_version }]];
       }),
     );
   }
@@ -279,6 +284,7 @@ export async function upsertContentForActor(
   entry: ContentEntry,
 ) {
   requireAdmin(actor);
+  entry = normalizeContentInput(entry);
   if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || typeof entry.title !== "string" || typeof entry.body !== "string" || !entry.id || !entry.title.trim() || !entry.body.trim()) {
     throw new PortalAccessError(422, "Titel og tekst skal udfyldes.");
   }
@@ -349,6 +355,7 @@ export async function deleteContentForActor(actor: PortalActor, key: string) {
 
 export async function upsertImageForActor(actor: PortalActor, entry: ImageEntry) {
   requireAdmin(actor);
+  entry = normalizeImageInput(entry);
   if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || typeof entry.alt !== "string" || typeof entry.src !== "string" || !entry.id || !entry.alt.trim() || !isSafeImageUrl(entry.src)) {
     throw new PortalAccessError(422, "Billede eller alttekst er ugyldig.");
   }
@@ -463,8 +470,14 @@ export async function upsertImageForActor(actor: PortalActor, entry: ImageEntry)
     await DB.batch(statements);
   } catch (error) {
     if (newAsset) {
-      const { FILES } = await getPersistenceBindings();
-      await FILES.delete(newAsset.storage_key).catch(() => undefined);
+      try {
+        const committed = await DB.prepare("SELECT id FROM portal_images WHERE id = ? AND tenant_id = ? AND storage_key = ?")
+          .bind(newAsset.id, actor.tenantId, newAsset.storage_key).first<{ id: string }>();
+        if (!committed) {
+          const { FILES } = await getPersistenceBindings();
+          await FILES.delete(newAsset.storage_key);
+        }
+      } catch { /* An ambiguous commit must not delete a referenced image. */ }
     }
     throw error;
   }
@@ -504,6 +517,8 @@ export async function saveApprovalForActor(
   actor: PortalActor,
   caseNumberValue: unknown,
   approvalValue: unknown,
+  expectedUpdatedAt: unknown,
+  expectedRowVersion: unknown,
 ) {
   if (actor.role === "user") {
     throw new PortalAccessError(403, "Kun D-GITA kan redigere godkendelsesfelter.");
@@ -513,6 +528,18 @@ export async function saveApprovalForActor(
   const DB = await preparePortalData();
   const userId = await resolveActorUserId(DB, actor);
   const application = await accessibleApplication(DB, actor, caseNumber);
+  if (!Number.isInteger(expectedRowVersion) || expectedRowVersion !== application.row_version) {
+    throw new PortalAccessError(409, "Sagen er ændret siden felterne blev hentet. Dine ændringer er bevaret her; åbn sagen igen før du gemmer.");
+  }
+  if (expectedUpdatedAt !== null && typeof expectedUpdatedAt !== "string") {
+    throw new PortalAccessError(409, "Hent D-GITA-felterne igen, før du gemmer.");
+  }
+  const prior = await DB.prepare(`SELECT updated_at FROM portal_dgita_approvals
+    WHERE tenant_id = ? AND application_id = ? AND application_version_id IS ?`)
+    .bind(actor.tenantId, application.id, application.current_version_id).first<{ updated_at: string }>();
+  if ((prior?.updated_at ?? null) !== expectedUpdatedAt) {
+    throw new PortalAccessError(409, "D-GITA-felterne er ændret af en anden. Dine ændringer er bevaret her; åbn sagen igen for at se den nyeste version.");
+  }
   const now = new Date().toISOString();
   const lifecycle = lifecycleForDgitaApproval(
     approval,
@@ -522,6 +549,16 @@ export async function saveApprovalForActor(
     },
     now,
   );
+  const assignee = approval.responsible.trim() ? await DB.prepare(`
+    SELECT user.id FROM portal_users user
+    WHERE user.tenant_id = ? AND user.status = 'active' AND user.display_name = ?
+      AND EXISTS (SELECT 1 FROM portal_user_roles role WHERE role.user_id = user.id
+        AND role.tenant_id = user.tenant_id AND role.role IN ('dgita_consultant', 'admin'))
+    ORDER BY user.id LIMIT 1
+  `).bind(actor.tenantId, approval.responsible.trim()).first<{ id: string }>() : null;
+  if (approval.responsible.trim() && !assignee) {
+    throw new PortalAccessError(422, "D-GITA-ansvarlig skal være navnet på en aktiv konsulent eller administrator i kommunen.");
+  }
   const activeLeaderApproval = await DB.prepare(`
     SELECT id FROM portal_approval_requests
     WHERE tenant_id = ? AND application_id = ?
@@ -536,6 +573,7 @@ export async function saveApprovalForActor(
   }
   const normalized: DgitaApproval = {
     ...approval,
+    revision: application.row_version + 1,
     updatedAt: now,
     updatedBy: actor.displayName,
   };
@@ -551,6 +589,7 @@ export async function saveApprovalForActor(
     DB.prepare(`
       UPDATE portal_applications
       SET status = ?, phase = ?, closed_at = ?, updated_at = ?,
+          assigned_consultant_user_id = COALESCE(?, assigned_consultant_user_id),
           row_version = row_version + 1
       WHERE id = ? AND tenant_id = ? AND row_version = ?
         AND current_version_id IS ?
@@ -565,6 +604,7 @@ export async function saveApprovalForActor(
       lifecycle.phase,
       lifecycle.closedAt,
       now,
+      assignee?.id ?? null,
       application.id,
       actor.tenantId,
       application.row_version,

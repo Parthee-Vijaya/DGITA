@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../features/auth/http";
+import { assertSameOrigin, authErrorResponse, noStoreJson, readJsonObject } from "../../../features/auth/http";
 import { requireActor } from "../../../features/auth/server";
 import {
   ApplicationRepositoryError,
@@ -12,7 +12,8 @@ import { isApplicationFormState } from "../../../features/application/state-vali
 export async function GET(request: Request) {
   try {
     const actor = await requireActor(request);
-    return noStoreJson({ draft: await getLatestApplicationDraft(actor) });
+    const caseNumber = new URL(request.url).searchParams.get("caseNumber");
+    return noStoreJson({ draft: await getLatestApplicationDraft(actor, caseNumber) });
   } catch (error) {
     return applicationError(error);
   }
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const body = (await request.json()) as {
+    const body = (await readJsonObject(request)) as {
       action?: unknown;
       caseNumber?: unknown;
       id?: unknown;

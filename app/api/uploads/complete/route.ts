@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
+import { readJsonObject,  assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
 import { requireActor } from "../../../../features/auth/server";
 import {
   cancelDirectApplicationUpload,
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const body = await request.json() as {
+    const body = await readJsonObject(request) as {
       draftId?: unknown;
       attachmentId?: unknown;
       blobUrl?: unknown;
@@ -43,7 +43,7 @@ export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const body = await request.json() as {
+    const body = await readJsonObject(request) as {
       draftId?: unknown;
       attachmentId?: unknown;
       blobUrl?: unknown;

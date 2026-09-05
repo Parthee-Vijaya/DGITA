@@ -474,6 +474,7 @@ export async function authorizePublicApprovalAttachment(
   if (request.status === "expired" || new Date(request.expires_at) <= new Date()) {
     throw new ApprovalWorkflowError(410, "APPROVAL_EXPIRED", "Godkendelseslinket er udløbet.");
   }
+  if (request.status !== "pending") throw new ApprovalWorkflowError(410, "APPROVAL_LINK_USED", "Beslutningen er allerede registreret. Bilag kan herefter åbnes i portalen.");
   const attachment = await DB.prepare(`
     SELECT original_name, content_type, storage_key, checksum_sha256, size_bytes
     FROM portal_attachments
@@ -783,7 +784,12 @@ async function approvalRequestByHash(DB: D1Database, tokenHash: string) {
 }
 
 function toPublicRequest(row: ApprovalRequestRow): PublicApprovalRequest {
+  if (row.status === "cancelled" || row.status === "expired" ||
+      new Date(row.expires_at) <= new Date()) {
+    throw new ApprovalWorkflowError(410, "APPROVAL_LINK_CLOSED", "Godkendelseslinket er udløbet eller annulleret. Bed D-GITA om et nyt link.");
+  }
   const state = parseSnapshot(row.snapshot_json);
+  const open = ["pending", "approving", "rejecting"].includes(row.status);
   return {
     caseNumber: row.case_number,
     systemName: row.system_name || state.selectedSystem?.name || state.manualSystemName || "Ikke navngivet",
@@ -797,16 +803,16 @@ function toPublicRequest(row: ApprovalRequestRow): PublicApprovalRequest {
     expiresAt: row.expires_at,
     decidedAt: row.decided_at,
     decisionComment: row.decision_comment,
-    summary: {
+    summary: open ? {
       purpose: state.purpose || "Ikke oplyst",
       department: state.department || "Ikke oplyst",
       acquisitionMethod: state.acquisitionMethod || "Ikke oplyst",
       totalCost: totalCost(state),
       personalData: state.personalData === "ja" ? "Ja" : "Nej",
       implementationPeriod: [state.startDate, state.endDate].filter(Boolean).join(" - ") || "Ikke oplyst",
-    },
-    details: approvalDetails(state),
-    attachments: Object.entries(state.attachments).flatMap(([kind, attachments]) =>
+    } : { purpose: "", department: "", acquisitionMethod: "", totalCost: "", personalData: "", implementationPeriod: "" },
+    details: open ? approvalDetails(state) : [],
+    attachments: !open ? [] : Object.entries(state.attachments).flatMap(([kind, attachments]) =>
       attachments
         .filter((attachment) => attachment.status === "uploaded")
         .map((attachment) => ({

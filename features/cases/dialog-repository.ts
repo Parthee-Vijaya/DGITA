@@ -147,6 +147,20 @@ export async function createCaseComment(
       now,
     ));
   }
+  if (comment.visibility === "shared" && actor.userId === application.owner_user_id && !application.assigned_consultant_user_id) {
+    statements.push(DB.prepare(`
+      INSERT INTO portal_notifications
+        (id, tenant_id, recipient_user_id, application_id, source_event_id,
+         event_type, title, body, link_path, status, created_at, read_at)
+      SELECT ? || ':' || user.id, ?, user.id, ?, ?, 'case_comment.created', ?, ?, ?, 'unread', ?, NULL
+      FROM portal_users user WHERE user.tenant_id = ? AND user.status = 'active' AND user.id <> ?
+        AND EXISTS (SELECT 1 FROM portal_user_roles role WHERE role.user_id = user.id
+          AND role.tenant_id = user.tenant_id AND role.role = 'dgita_consultant')
+      ON CONFLICT(recipient_user_id, source_event_id) DO NOTHING
+    `).bind(crypto.randomUUID(), actor.tenantId, application.id, auditId,
+      `Ny kommentar på ${caseNumber}`, comment.body.slice(0, 240), `/?case=${encodeURIComponent(caseNumber)}`,
+      now, actor.tenantId, actor.userId));
+  }
   await DB.batch(statements);
 
   return {

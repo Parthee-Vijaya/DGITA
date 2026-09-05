@@ -48,6 +48,8 @@ import type { Actor } from "../features/auth/types";
 import { BrandLockup } from "../features/brand/BrandLockup";
 import { PartnerFooter } from "../features/brand/PartnerFooter";
 import { ApplicationFormView } from "../features/application/ApplicationFormView";
+import { confirmNavigation, useUnsavedChanges } from "../features/application/use-unsaved-changes";
+import { labelQuestionControls } from "../features/application/QuestionContent";
 import {
   formatDanishAmount,
   getDisplaySystemName,
@@ -109,6 +111,7 @@ import {
   type WorkspaceViewer,
 } from "../features/workspace/model";
 import { searchKnowledge } from "../features/workspace/knowledge-search";
+import { csvCell } from "../features/workspace/csv";
 import { useDemoWorkspace } from "../features/workspace/use-demo-workspace";
 
 type View = WorkspaceArea;
@@ -182,9 +185,15 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
   const role = viewer.role;
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [casesLoaded, setCasesLoaded] = useState(false);
+  const [casesError, setCasesError] = useState<string | null>(null);
+  const casesRequestRef = useRef(0);
+  const roleChangingRef = useRef(false);
+  const [roleChanging, setRoleChanging] = useState(false);
   const [view, setView] = useState<View>("home");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [correctionCaseNumber, setCorrectionCaseNumber] = useState<string | null>(null);
+  const [draftCaseNumber, setDraftCaseNumber] = useState<string | null>(null);
+  const [newFormKey, setNewFormKey] = useState(0);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -194,7 +203,19 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStep, setTourStep] = useState(0);
   const initialDeepLinkHandledRef = useRef(false);
+  const toastTimerRef = useRef<number | undefined>(undefined);
   const workspace = useDemoWorkspace(viewer);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setProfileOpen(false); setNotificationsOpen(false); setMobileMenu(false); }
+    };
+    const outside = (event: MouseEvent) => {
+      if (event.target instanceof Element && !event.target.closest(".header-popover-anchor")) { setProfileOpen(false); setNotificationsOpen(false); }
+    };
+    window.addEventListener("keydown", close);
+    window.addEventListener("click", outside);
+    return () => { window.removeEventListener("keydown", close); window.removeEventListener("click", outside); };
+  }, []);
   const notificationFeed = usePortalNotifications(
     `${viewer.tenantId}:${viewer.subject}:${viewer.role}`,
   );
@@ -208,11 +229,13 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
     : null;
 
   const showToast = useCallback((message: string) => {
+    window.clearTimeout(toastTimerRef.current);
     setToast(message);
-    window.setTimeout(() => setToast(null), 3600);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 6000);
   }, []);
 
   const reloadCases = useCallback(async () => {
+    const requestId = ++casesRequestRef.current;
     try {
       const response = await fetch("/api/cases", { cache: "no-store" });
       if (response.status === 401) {
@@ -223,10 +246,14 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       if (!response.ok || !payload.cases) {
         throw new Error(payload.error || "Sagerne kunne ikke hentes.");
       }
+      if (requestId !== casesRequestRef.current) return null;
       setCases(payload.cases);
       setCasesLoaded(true);
+      setCasesError(null);
       return payload.cases;
     } catch (reason) {
+      if (requestId !== casesRequestRef.current) return null;
+      setCasesError((reason as Error).message);
       showToast((reason as Error).message);
       return null;
     }
@@ -234,12 +261,12 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void reloadCases(), 0);
-    return () => window.clearTimeout(timeout);
+    return () => { window.clearTimeout(timeout); casesRequestRef.current += 1; };
   }, [reloadCases, viewer.role, viewer.subject, viewer.tenantId]);
 
   useEffect(() => {
     try {
-      if (window.localStorage.getItem(ONBOARDING_STORAGE_KEY)) return;
+      if (window.localStorage.getItem(ONBOARDING_STORAGE_KEY) || window.location.search) return;
       const timeout = window.setTimeout(() => {
         setView("home");
         setTourStep(0);
@@ -252,16 +279,18 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
   }, []);
 
   const navigate = useCallback((next: View) => {
+    if (!confirmNavigation()) return false;
     if (!canAccessArea(role, next)) {
       showToast("Din aktuelle rolle har ikke adgang til dette område.");
       return;
     }
-    if (next === "application") setCorrectionCaseNumber(null);
+    if (next === "application") { setCorrectionCaseNumber(null); setDraftCaseNumber(null); setNewFormKey((value) => value + 1); }
     setView(next);
     setMobileMenu(false);
     setProfileOpen(false);
     setNotificationsOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
+    return true;
   }, [role, showToast]);
 
   const openCase = useCallback((id: string, sourceCases: CaseRecord[] = cases) => {
@@ -269,8 +298,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       showToast("Sagen findes ikke, eller du har ikke adgang til den.");
       return;
     }
-    setSelectedId(id);
-    navigate("detail");
+    if (navigate("detail")) setSelectedId(id);
   }, [cases, navigate, showToast, viewer]);
 
   useEffect(() => {
@@ -282,9 +310,44 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         `${window.location.pathname}${window.location.search}`,
       );
       if (caseNumber) openCase(caseNumber);
+      else {
+        const params = new URLSearchParams(window.location.search);
+        const requestedView = params.get("view") as View | null;
+        if (requestedView && canAccessArea(role, requestedView)) {
+          setView(requestedView);
+          if (requestedView === "application") {
+            setDraftCaseNumber(params.get("draft"));
+            setCorrectionCaseNumber(params.get("correction"));
+          }
+        }
+      }
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [casesLoaded, openCase]);
+  }, [casesLoaded, openCase, role]);
+
+  useEffect(() => {
+    if (!initialDeepLinkHandledRef.current) return;
+    const params = new URLSearchParams();
+    if (view === "detail" && selectedId) params.set("case", selectedId);
+    else if (view !== "home") params.set("view", view);
+    if (view === "application" && draftCaseNumber) params.set("draft", draftCaseNumber);
+    if (view === "application" && correctionCaseNumber) params.set("correction", correctionCaseNumber);
+    const target = params.size ? `/?${params}` : "/";
+    if (`${window.location.pathname}${window.location.search}` !== target) window.history.pushState(null, "", target);
+    const pop = () => {
+      if (!confirmNavigation()) { window.history.pushState(null, "", target); return; }
+      const next = new URLSearchParams(window.location.search);
+      const nextCase = next.get("case");
+      const nextView = nextCase ? "detail" : (next.get("view") ?? "home") as View;
+      if (!canAccessArea(role, nextView)) return;
+      setSelectedId(nextCase);
+      setDraftCaseNumber(next.get("draft"));
+      setCorrectionCaseNumber(next.get("correction"));
+      setView(nextView);
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, [view, selectedId, draftCaseNumber, correctionCaseNumber, role]);
 
   async function openNotification(notification: PortalNotification) {
     const caseNumber = caseNumberFromNotification(notification);
@@ -297,6 +360,10 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
   }
 
   async function changeRole(nextRole: WorkspaceRole) {
+    if (roleChangingRef.current || nextRole === role || !confirmNavigation()) return;
+    roleChangingRef.current = true;
+    setRoleChanging(true);
+    casesRequestRef.current += 1;
     try {
       const response = await fetch("/api/auth/dev-login", {
         method: "POST",
@@ -319,25 +386,31 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       setMobileMenu(false);
       setSelectedId(null);
       setCorrectionCaseNumber(null);
-      if (!canAccessArea(nextRole, view) || view === "detail") {
-        setView(defaultAreaForRole(nextRole));
-      }
+      setDraftCaseNumber(null);
+      setView(defaultAreaForRole(nextRole));
       showToast(`Testrolle skiftet til ${ROLE_LABELS[nextRole]}.`);
+    } catch (reason) {
+      showToast((reason as Error).message);
+    } finally {
+      roleChangingRef.current = false;
+      setRoleChanging(false);
+    }
+  }
+
+  async function logout() {
+    if (!confirmNavigation()) return;
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Du kunne ikke logges ud. Prøv igen.");
+      router.replace("/login");
+      router.refresh();
     } catch (reason) {
       showToast((reason as Error).message);
     }
   }
 
-  async function logout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } finally {
-      router.replace("/login");
-      router.refresh();
-    }
-  }
-
   function startTutorial() {
+    if (!confirmNavigation()) return;
     setView("home");
     setMobileMenu(false);
     setProfileOpen(false);
@@ -372,6 +445,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         role={role}
         viewer={viewer}
         canSwitchRole={viewer.provider === "dev"}
+        roleChanging={roleChanging}
         onNavigate={navigate}
         onRoleChange={(nextRole) => void changeRole(nextRole)}
         onMobileMenu={() => setMobileMenu(!mobileMenu)}
@@ -387,6 +461,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         onOpenNotification={(notification) => void openNotification(notification)}
         editorMode={editorMode}
         onToggleEditor={() => {
+          if (workspace.loading || workspace.error) { showToast("Vent, til portalindholdet er hentet, før du aktiverer editoren."); return; }
           setEditorSelection(null);
           setEditorMode((current) => !current);
           setProfileOpen(false);
@@ -396,6 +471,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
       />
 
       <main id="main-content">
+        {(view === "cases" || view === "consultant") && (!casesLoaded || casesError) ? <div className="page-width data-state" role={casesError ? "alert" : "status"}><Info size={22} /><div><strong>{casesError ? "Sagsoversigten kunne ikke opdateres" : "Henter dine sager…"}</strong><p>{casesError ?? "Vi kontrollerer din adgang og henter de seneste oplysninger."}</p></div>{casesError ? <button className="line-button" onClick={() => void reloadCases()}>Prøv igen</button> : null}</div> : null}
         {view === "home" ? (
           <HomeView
             role={role}
@@ -407,22 +483,21 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
             onNavigate={navigate}
           />
         ) : null}
-        {view === "cases" ? (
+        {view === "cases" && casesLoaded && !casesError ? (
           <CasesView personal={role === "user"} rows={visibleCases} onNew={() => navigate("application")} onOpen={openCase} />
         ) : null}
-        {view === "consultant" ? (
+        {view === "consultant" && casesLoaded && !casesError ? (
           <ConsultantView rows={visibleCases} onOpen={openCase} />
         ) : null}
         {view === "application" ? (
           <ApplicationFormView
-            key={correctionCaseNumber ?? "new"}
+            key={`${viewer.subject}:${correctionCaseNumber ?? draftCaseNumber ?? `new-${newFormKey}`}`}
             correctionCaseNumber={correctionCaseNumber}
+            draftCaseNumber={draftCaseNumber}
             onBack={() => {
-              const caseNumber = correctionCaseNumber;
-              setCorrectionCaseNumber(null);
+              const caseNumber = correctionCaseNumber ?? draftCaseNumber;
               if (caseNumber) {
-                setSelectedId(caseNumber);
-                navigate("detail");
+                if (navigate("detail")) { setSelectedId(caseNumber); setCorrectionCaseNumber(null); setDraftCaseNumber(null); }
               } else {
                 navigate("cases");
               }
@@ -434,7 +509,6 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
             }}
             onSubmit={(_snapshot, result) => {
               showToast(result.mode === "correction" ? `Version ${result.versionNumber} er versionslåst og genindsendt sikkert.` : "Ansøgningen er versionslåst og indsendt sikkert.");
-              setCorrectionCaseNumber(null);
               void reloadCases().then((refreshedCases) => {
                 if (result.mode === "correction") {
                   setSelectedId(result.caseNumber);
@@ -450,15 +524,19 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
         ) : null}
         {view === "detail" && selectedCase ? (
           <CaseDetail
-            key={selectedCase.id}
+            key={`${viewer.subject}:${selectedCase.id}`}
             item={selectedCase}
             viewer={viewer}
             approval={workspace.approvals[selectedCase.id] ?? EMPTY_D_GITA_APPROVAL}
+            workspaceReady={!workspace.loading && !workspace.error}
+            onRetryWorkspace={() => void workspace.refresh()}
             fieldComments={workspace.fieldComments.filter((comment) => comment.caseId === selectedCase.id)}
             onBack={() => navigate(role === "user" ? "cases" : "consultant")}
             onStartCorrection={viewer.role === "user" && selectedCase.status === "changes_requested" ? () => {
-              navigate("application");
-              setCorrectionCaseNumber(selectedCase.id);
+              if (navigate("application")) setCorrectionCaseNumber(selectedCase.id);
+            } : undefined}
+            onEditDraft={capabilitiesFor(viewer.role).createApplications && selectedCase.ownerSubject === viewer.subject && selectedCase.status === "draft" ? () => {
+              if (navigate("application")) setDraftCaseNumber(selectedCase.id);
             } : undefined}
             onCaseChanged={async () => {
               await reloadCases();
@@ -466,7 +544,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
             onSaveApproval={async (approval) => {
               try {
                 const saved = await workspace.updateApproval(selectedCase.id, approval, viewer);
-                if (saved) showToast("D-GITA-godkendelsen er gemt med auditspor.");
+                if (saved) { showToast("D-GITA-godkendelsen er gemt med auditspor."); await reloadCases(); }
                 return saved;
               } catch (reason) {
                 showToast((reason as Error).message);
@@ -558,7 +636,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
 
       {toast ? (
         <div className="site-toast" role="status">
-          <CheckCircle2 size={19} />
+          <Info size={19} />
           <span>{toast}</span>
           <button type="button" aria-label="Luk besked" onClick={() => setToast(null)}>
             <X size={17} />
@@ -611,8 +689,7 @@ export function PortalClient({ initialViewer }: { initialViewer: Actor }) {
           }
         }}
         onOpenLibrary={() => {
-          setEditorSelection(null);
-          navigate("admin");
+          if (navigate("admin")) setEditorSelection(null);
         }}
       />
       <SpotlightTour
@@ -637,6 +714,7 @@ function Header({
   role,
   viewer,
   canSwitchRole,
+  roleChanging,
   mobileMenu,
   profileOpen,
   notificationsOpen,
@@ -660,6 +738,7 @@ function Header({
   role: WorkspaceRole;
   viewer: Actor;
   canSwitchRole: boolean;
+  roleChanging: boolean;
   mobileMenu: boolean;
   profileOpen: boolean;
   notificationsOpen: boolean;
@@ -714,6 +793,7 @@ function Header({
             <span>Testrolle</span>
             <select
               aria-label="Skift testrolle"
+              disabled={roleChanging}
               value={role}
               onChange={(event) => onRoleChange(event.target.value as WorkspaceRole)}
             >
@@ -724,14 +804,14 @@ function Header({
             <ChevronDown size={14} />
           </label> : null}
           <div className="header-popover-anchor">
-            <button className="header-icon-button" data-tour="notifications" type="button" aria-label="Notifikationer" onClick={onNotifications}>
+            <button className="header-icon-button" data-tour="notifications" type="button" aria-label="Notifikationer" aria-expanded={notificationsOpen} onClick={onNotifications}>
               <Bell size={20} />
               {notificationCount > 0 ? <span>{Math.min(notificationCount, 99)}</span> : null}
             </button>
             {notificationsOpen ? <NotificationPanel notifications={notifications} unreadCount={notificationCount} loading={notificationsLoading} error={notificationsError} onMarkAllRead={onMarkNotificationsRead} onOpen={onOpenNotification} /> : null}
           </div>
           <div className="header-popover-anchor profile-anchor">
-            <button className="account-button" data-tour="profile" type="button" onClick={onProfile}>
+            <button className="account-button" data-tour="profile" type="button" aria-expanded={profileOpen} onClick={onProfile}>
               <span className="account-avatar">{viewer.initials}</span>
               <span className="account-copy"><strong>{viewer.displayName}</strong><small>{viewer.municipality}</small></span>
               <ChevronDown size={16} />
@@ -741,7 +821,7 @@ function Header({
                 <div className="profile-menu-head"><span>{viewer.initials}</span><div><strong>{viewer.displayName}</strong><small>{ROLE_LABELS[role]}{viewer.provider === "dev" ? " · testtilstand" : ""}</small></div></div>
                 {canSwitchRole ? <label className="profile-role-switcher">
                   <span>Testrolle</span>
-                  <select aria-label="Skift testrolle fra profilmenuen" value={role} onChange={(event) => onRoleChange(event.target.value as WorkspaceRole)}>
+                  <select disabled={roleChanging} aria-label="Skift testrolle fra profilmenuen" value={role} onChange={(event) => onRoleChange(event.target.value as WorkspaceRole)}>
                     {WORKSPACE_ROLES.map((value) => <option key={value} value={value}>{ROLE_LABELS[value]}</option>)}
                   </select>
                   <ChevronDown size={14} aria-hidden="true" />
@@ -753,7 +833,7 @@ function Header({
               </div>
             ) : null}
           </div>
-          <button className="mobile-menu-button" type="button" aria-label="Vis navigation" onClick={onMobileMenu}>
+          <button className="mobile-menu-button" type="button" aria-label="Vis navigation" aria-expanded={mobileMenu} onClick={onMobileMenu}>
             {mobileMenu ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
@@ -880,7 +960,7 @@ function HomeView({
           <ResourceLink content={content} titleId="home.resources.municipality.title" bodyId="home.resources.municipality.body" title="Info fra din kommune" text="Særlige krav og information fra Kalundborg." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
           <ResourceLink content={content} titleId="home.resources.changelog.title" bodyId="home.resources.changelog.body" title="Ny funktionalitet" text="Se de seneste ændringer i portalen." editorMode={editorMode} onEdit={onEdit} onClick={() => onNavigate("knowledge")} />
         </div>
-        <div className="operation-strip"><span className="operation-dot" /><strong>Portal klar</strong><span>Databasens og mailkøens status vises for administratorer under Integrationer og Mail &amp; kvitteringer.</span></div>
+        <div className="operation-strip"><span className="operation-dot" /><strong>Drift og integrationer</strong><span>Databasens og mailkøens status vises for administratorer under Integrationer og Mail &amp; kvitteringer.</span></div>
       </section>
     </div>
   );
@@ -901,7 +981,7 @@ function CasesView({ personal, rows: availableRows, onNew, onOpen }: { personal:
     const q = query.toLowerCase();
     return (!q || `${item.id} ${item.system}`.toLowerCase().includes(q)) && (phase === "Alle faser" || item.phase === phase);
   }), [availableRows, query, phase]);
-  const featured = availableRows.find((item) => item.id === "ITA-001284") ?? availableRows[0];
+  const featured = availableRows[0];
 
   return (
     <div className="portal-page page-width">
@@ -917,7 +997,7 @@ function CasesView({ personal, rows: availableRows, onNew, onOpen }: { personal:
           <div className="featured-meta"><PhaseTag phase={featured.phase} /><ApprovalTag approval={featured.approval} /><span>Ændret {featured.changed}</span></div>
         </div>
         <div className="featured-progress" aria-label="Sagsforløb">
-          <span className="done"><Check size={16} /></span><i /><span className="done"><Check size={16} /></span><i /><span className="current">3</span><i /><span>4</span>
+          {D_GITA_PHASES.map((phase, index) => <span key={phase} className={index < D_GITA_PHASES.indexOf(featured.phase) ? "done" : phase === featured.phase ? "current" : ""} title={phase}>{index < D_GITA_PHASES.indexOf(featured.phase) ? <Check size={16} /> : index + 1}</span>)}
         </div>
         <button className="line-button" type="button" onClick={() => onOpen(featured.id)}>Åbn sag <ArrowRight size={17} /></button>
       </section> : null}
@@ -983,10 +1063,6 @@ function ConsultantView({ rows: availableRows, onOpen }: { rows: CaseRecord[]; o
       </section>
     </div>
   );
-}
-
-function csvCell(value: string) {
-  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function SummaryStat({ value, label, detail }: { value: string; label: string; detail: string }) {
@@ -1087,7 +1163,7 @@ function KnowledgeView({
 }
 
 function Question({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
-  return <div className="question"><div className="question-copy"><label>{title}</label>{hint ? <p>{hint}</p> : null}</div>{children}</div>;
+  return <div className="question" role="group" aria-label={title}><div className="question-copy"><div className="question-title">{title}</div>{hint ? <p>{hint}</p> : null}</div>{labelQuestionControls(children, title)}</div>;
 }
 
 function CaseDetail({
@@ -1097,6 +1173,9 @@ function CaseDetail({
   fieldComments,
   onBack,
   onStartCorrection,
+  onEditDraft,
+  workspaceReady,
+  onRetryWorkspace,
   onCaseChanged,
   onSaveApproval,
   onAddFieldComment,
@@ -1108,6 +1187,9 @@ function CaseDetail({
   fieldComments: FieldComment[];
   onBack: () => void;
   onStartCorrection?: () => void;
+  onEditDraft?: () => void;
+  workspaceReady: boolean;
+  onRetryWorkspace: () => void;
   onCaseChanged: () => Promise<void>;
   onSaveApproval: (approval: DgitaApproval) => Promise<boolean>;
   onAddFieldComment: (fieldId: string, fieldLabel: string, body: string) => Promise<boolean>;
@@ -1118,6 +1200,8 @@ function CaseDetail({
   const [statusMessage, setStatusMessage] = useState("");
   const [mailSending, setMailSending] = useState(false);
   const [approvalRequesting, setApprovalRequesting] = useState(false);
+  useUnsavedChanges(Boolean(statusMessage.trim()), mailSending || approvalRequesting);
+  const mailAttemptRef = useRef<{ message: string; key: string } | null>(null);
   const canProcess = capabilitiesFor(viewer.role).processApplications;
   const caseFeed = useCaseCommentsAndActivity(item.id);
   const caseDetail = useCaseDetail(item.id);
@@ -1127,15 +1211,17 @@ function CaseDetail({
     const message = statusMessage.trim();
     if (!message || mailSending) return;
     setMailSending(true);
+    if (mailAttemptRef.current?.message !== message) mailAttemptRef.current = { message, key: crypto.randomUUID() };
     try {
       const response = await fetch(`/api/cases/${encodeURIComponent(item.id)}/mail`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ message, idempotencyKey: mailAttemptRef.current.key }),
       });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error || "Statusmailen kunne ikke sættes i kø.");
       setStatusMessage("");
+      mailAttemptRef.current = null;
       setStatusComposerOpen(false);
       onToast("Statusmailen er sat i den sikre Outlook-kø.");
     } catch (reason) {
@@ -1170,7 +1256,7 @@ function CaseDetail({
       <button className="back-text" type="button" onClick={onBack}><ArrowLeft size={18} /> {viewer.role === "user" ? "Mine ansøgninger" : "Alle sager"}</button>
       <section className="case-title-block">
         <div><span className="section-label dark">{item.id} · {item.municipality} Kommune</span><h1>{item.system}</h1><div className="case-title-meta"><PhaseTag phase={item.phase} /><span>Ændret {item.changed}</span></div></div>
-        <div>{item.receiptAvailable ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=submission`}><Download size={17} /> Indsendelseskvittering</a> : <button className="line-button" type="button" disabled title="Kvitteringen oprettes, når ansøgningen er indsendt"><Download size={17} /> Indsendelseskvittering</button>}{item.approval === "Godkendt" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=approval`}><Download size={17} /> Godkendelseskvittering</a> : null}{item.phase === "Afsluttet" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=final`}><Download size={17} /> Slutkvittering</a> : null}{onStartCorrection ? <button className="solid-button" type="button" onClick={onStartCorrection}><PencilLine size={17} /> Ret og genindsend</button> : null}{canProcess ? <button className="solid-button" type="button" onClick={() => setStatusComposerOpen((current) => !current)}><Mail size={17} /> Send statusmail</button> : null}</div>
+        <div>{item.receiptAvailable ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=submission`}><Download size={17} /> Indsendelseskvittering</a> : <button className="line-button" type="button" disabled title="Kvitteringen oprettes, når ansøgningen er indsendt"><Download size={17} /> Indsendelseskvittering</button>}{item.approval === "Godkendt" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=approval`}><Download size={17} /> Godkendelseskvittering</a> : null}{item.phase === "Afsluttet" ? <a className="line-button" href={`/api/cases/${encodeURIComponent(item.id)}/receipt?kind=final`}><Download size={17} /> Slutkvittering</a> : null}{onEditDraft ? <button className="solid-button" type="button" onClick={onEditDraft}><PencilLine size={17} /> Fortsæt kladde</button> : null}{onStartCorrection ? <button className="solid-button" type="button" onClick={onStartCorrection}><PencilLine size={17} /> Ret og genindsend</button> : null}{canProcess ? <button className="solid-button" type="button" onClick={() => setStatusComposerOpen((current) => !current)}><Mail size={17} /> Send statusmail</button> : null}</div>
       </section>
 
       {statusComposerOpen ? <section className="status-mail-composer" aria-label="Sæt statusmail i kø"><div><span className="section-label dark">Outlook-status</span><h2>Skriv status til {item.applicant}</h2><p>Mailen valideres og lægges i den idempotente mailkø. Den afsendes først, når Microsoft Graph er konfigureret.</p></div><textarea className="clean-input" rows={4} value={statusMessage} onChange={(event) => setStatusMessage(event.target.value)} placeholder="Skriv en kort, konkret status på sagen" maxLength={8000} /><div><button className="line-button" type="button" onClick={() => setStatusComposerOpen(false)}>Annuller</button><button className="solid-button" type="button" disabled={!statusMessage.trim() || mailSending} onClick={() => void queueStatusMessage()}><Send size={16} /> {mailSending ? "Gemmer…" : "Sæt i mailkø"}</button></div></section> : null}
@@ -1178,14 +1264,14 @@ function CaseDetail({
       <CaseJourney active={item.phase} />
 
       <nav className="detail-tabs" aria-label="Sagens indhold">
-        {tabs.map((name) => <button className={tab === name ? "active" : ""} type="button" key={name} onClick={() => setTab(name)}>{name === "overblik" ? <LayoutGrid size={17} /> : name === "ansøgning" ? <FileText size={17} /> : name === "filer" ? <Paperclip size={17} /> : name === "kommentarer" ? <MessageSquare size={17} /> : name === "dgita" ? <ShieldCheck size={17} /> : <History size={17} />}{name === "dgita" ? "D-GITA godkendelse" : name}<span>{name === "kommentarer" ? String(caseFeed.comments.length) : ""}</span></button>)}
+        {tabs.map((name) => <button className={tab === name ? "active" : ""} type="button" key={name} onClick={() => { if (confirmNavigation()) setTab(name); }}>{name === "overblik" ? <LayoutGrid size={17} /> : name === "ansøgning" ? <FileText size={17} /> : name === "filer" ? <Paperclip size={17} /> : name === "kommentarer" ? <MessageSquare size={17} /> : name === "dgita" ? <ShieldCheck size={17} /> : <History size={17} />}{name === "dgita" ? "D-GITA godkendelse" : name}<span>{name === "kommentarer" ? String(caseFeed.comments.length) : ""}</span></button>)}
       </nav>
 
-      {tab === "overblik" ? caseDetail.detail ? <CaseOverview item={item} detail={caseDetail.detail} canRequestApproval={canProcess && Boolean(item.receiptAvailable)} approvalRequesting={approvalRequesting} onRequestApproval={() => void requestLeaderApproval()} /> : <CaseDetailDataState loading={caseDetail.isLoading} error={caseDetail.error?.message ?? null} onRetry={() => void caseDetail.refetch()} /> : null}
+      {tab === "overblik" ? caseDetail.detail ? <CaseOverview item={item} detail={caseDetail.detail} canRequestApproval={canProcess && Boolean(item.receiptAvailable) && !["closed", "approved", "rejected", "changes_requested"].includes(item.status ?? "")} approvalRequesting={approvalRequesting} onRequestApproval={() => void requestLeaderApproval()} /> : <CaseDetailDataState loading={caseDetail.isLoading} error={caseDetail.error?.message ?? null} onRetry={() => void caseDetail.refetch()} /> : null}
       {tab === "ansøgning" ? caseDetail.detail ? <ApplicationSnapshot detail={caseDetail.detail} canComment={canProcess} comments={fieldComments} onAddComment={onAddFieldComment} /> : <CaseDetailDataState loading={caseDetail.isLoading} error={caseDetail.error?.message ?? null} onRetry={() => void caseDetail.refetch()} /> : null}
       {tab === "filer" ? <FileList caseId={item.id} /> : null}
       {tab === "kommentarer" ? <Comments comments={caseFeed.comments} loading={caseFeed.isLoading} submitting={caseFeed.isSubmitting} error={caseFeed.error?.message ?? null} canInternal={canProcess} onSubmit={caseFeed.submitComment} /> : null}
-      {tab === "dgita" && canProcess ? <DgitaApprovalPanel value={approval} onSave={onSaveApproval} /> : null}
+      {tab === "dgita" && canProcess ? workspaceReady ? <DgitaApprovalPanel lockedReason={item.status === "closed" ? "Sagen er afsluttet. D-GITA-felterne er låst og vises til læsning." : item.status === "changes_requested" ? "Afvent anmoderens genindsendelse, før behandlingen fortsættes." : item.approval === "Afventer" ? "Afvent lederens beslutning, før D-GITA-felterne gemmes." : null} value={approval.updatedAt ? approval : { ...approval, phase: item.phase }} onSave={async (next) => { const saved = await onSaveApproval(next); if (saved) await Promise.all([caseDetail.refetch(), caseFeed.refresh()]); return saved; }} /> : <div className="data-state" role="status"><Info size={20} /><p>D-GITA-felterne skal hentes, før de kan redigeres.</p><button className="line-button" onClick={onRetryWorkspace}>Hent igen</button></div> : null}
       {tab === "historik" ? <AuditTrail events={caseFeed.events} loading={caseFeed.isLoading} error={caseFeed.error?.message ?? null} /> : null}
     </div>
   );
@@ -1255,6 +1341,7 @@ function FieldCommentsPanel({
 }) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingField, setSavingField] = useState<string | null>(null);
+  useUnsavedChanges(Object.values(drafts).some((text) => Boolean(text.trim())), Boolean(savingField));
   const fieldValues = applicationFieldValues(snapshot);
 
   async function saveComment(fieldId: string, fieldLabel: string, body: string) {
@@ -1322,15 +1409,31 @@ function YesNoControl({ value, onChange }: { value: "" | "Ja" | "Nej"; onChange:
   return <div className="choice-row" role="radiogroup">{(["Ja", "Nej"] as const).map((option) => <button className={value === option ? "selected" : ""} type="button" role="radio" aria-checked={value === option} key={option} onClick={() => onChange(option)}><span aria-hidden="true">{value === option ? <Check size={14} /> : null}</span>{option}</button>)}</div>;
 }
 
-function DgitaApprovalPanel({ value, onSave }: { value: DgitaApproval; onSave: (value: DgitaApproval) => Promise<boolean> }) {
+function DgitaApprovalPanel({ value, onSave, lockedReason }: { lockedReason: string | null; value: DgitaApproval; onSave: (value: DgitaApproval) => Promise<boolean> }) {
   const [draft, setDraft] = useState<DgitaApproval>(() => structuredClone(value));
   const [saving, setSaving] = useState(false);
+  const [baseline, setBaseline] = useState(() => JSON.stringify(value));
+  const dirty = JSON.stringify(draft) !== baseline;
+  const clearGuard = useUnsavedChanges(dirty, saving);
+  if (!dirty && baseline !== JSON.stringify(value)) {
+    setDraft(structuredClone(value));
+    setBaseline(JSON.stringify(value));
+  }
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      if (await onSave(draft)) { setBaseline(JSON.stringify(draft)); clearGuard(); }
+    } finally { setSaving(false); }
+  }
 
   function update<K extends keyof DgitaApproval>(field: K, next: DgitaApproval[K]) {
+    if (saving) return;
     setDraft((current) => ({ ...current, [field]: next }));
   }
 
-  return <div className="dgita-review-layout"><section className="plain-section dgita-review"><div className="plain-heading"><span className="section-label dark">Internt arbejdsområde</span><h2>D-GITA-godkendelse</h2><button className="solid-button" type="button" disabled={saving} onClick={() => { setSaving(true); void onSave(draft).finally(() => setSaving(false)); }}><Save size={17} /> {saving ? "Gemmer…" : "Gem D-GITA-felter"}</button></div><div className="internal-notice"><LockKeyhole size={18} /><p>Dette område er kun tilgængeligt for D-GITA-konsulenter og administratorer. Interne kommentarer vises aldrig for anmoderen eller i PDF-kvitteringen.</p></div><Question title="D-GITA felt: Er ansøgningen godkendt?"><YesNoControl value={draft.approved} onChange={(next) => update("approved", next)} /></Question><Question title="D-GITA felt: Dato"><input className="clean-input" type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></Question><Question title="D-GITA felt: Angiv på hvilket lovgrundlag at data behandles" hint="Det kan være en idé at tage kontakt til den i kommunen som er informationssikkerhedsansvarlig/koordinator"><label className="clean-select review-select"><select value={draft.legalBasis} onChange={(event) => update("legalBasis", event.target.value as DgitaApproval["legalBasis"])}><option value="">Vælg lovgrundlag</option>{D_GITA_LEGAL_BASES.map((basis) => <option key={basis}>{basis}</option>)}</select><ChevronDown size={16} /></label></Question><Question title="D-GITA felt: D-GITA ansvarlig" hint="Skriv her hvem der er ansvarlig for behandling af formularen."><input className="clean-input" value={draft.responsible} onChange={(event) => update("responsible", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Er der flere D-GITA ansvarlige?"><YesNoControl value={draft.hasAdditionalResponsible} onChange={(next) => update("hasAdditionalResponsible", next)} /></Question>{draft.hasAdditionalResponsible === "Ja" ? <Question title="Hvis ja, angiv næste D-GITA ansvarlige"><input className="clean-input" value={draft.additionalResponsible} onChange={(event) => update("additionalResponsible", event.target.value)} placeholder="Angiv en eller flere personer" /></Question> : null}<Question title="D-GITA felt: IT-konsulent" hint="Vælg den person som bliver koblet på løsningen, som en teknisk ansvarlig fra IT-afdelingen."><input className="clean-input" value={draft.itConsultant} onChange={(event) => update("itConsultant", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Medfører systemet ændringer i den eksisterende infrastruktur?"><YesNoControl value={draft.infrastructureChanges} onChange={(next) => update("infrastructureChanges", next)} /></Question><Question title="D-GITA felt: Bemærkninger"><textarea className="clean-input" rows={4} value={draft.notes} onChange={(event) => update("notes", event.target.value)} /></Question><Question title="D-GITA felt: Interne kommentarer" hint="Kommentarer mellem D-GITA konsulenter. Feltet er skjult for anmoder og medtages ikke i den PDF, der genereres ved endelig godkendelse."><textarea className="clean-input internal-comment-input" rows={5} value={draft.internalComments} onChange={(event) => update("internalComments", event.target.value)} /></Question><Question title="D-GITA felt: Fase" hint="Beskriver hvilken fase ansøgningen er i."><label className="clean-select review-select"><select value={draft.phase} onChange={(event) => update("phase", event.target.value as DgitaApproval["phase"])}>{D_GITA_PHASES.map((phase) => <option key={phase}>{phase}</option>)}</select><ChevronDown size={16} /></label></Question></section><aside className="review-source-note"><ShieldCheck size={23} /><span className="section-label dark">Kildematch</span><h3>Felter fra den nuværende løsning</h3><p>Godkendelsesfelterne og hjælpeteksterne er kortlagt fra Power Pages-formularen “D-GITA-Godkendelse”.</p><ul><li><Check size={14} /> Betinget ekstra ansvarlig</li><li><Check size={14} /> Lovgrundlag: NSIS, NIS2 eller GDPR</li><li><Check size={14} /> Intern kommentar adskilt fra ansøger</li><li><Check size={14} /> Fase og infrastrukturbeslutning</li></ul></aside></div>;
+  return <div className="dgita-review-layout"><section className="plain-section dgita-review"><div className="plain-heading"><span className="section-label dark">Internt arbejdsområde</span><h2>D-GITA-godkendelse</h2><button className="solid-button" type="button" disabled={saving || Boolean(lockedReason)} onClick={() => void save()}><Save size={17} /> {saving ? "Gemmer…" : "Gem D-GITA-felter"}</button></div><div className="internal-notice"><LockKeyhole size={18} /><p>Dette område er kun tilgængeligt for D-GITA-konsulenter og administratorer. Interne kommentarer vises aldrig for anmoderen eller i PDF-kvitteringen.</p></div>{lockedReason ? <p className="review-lock-note" role="status"><LockKeyhole size={16} /> {lockedReason}</p> : null}<fieldset className="review-fields" disabled={saving || Boolean(lockedReason)}><Question title="D-GITA felt: Er ansøgningen godkendt?"><YesNoControl value={draft.approved} onChange={(next) => update("approved", next)} /></Question><Question title="D-GITA felt: Dato"><input className="clean-input" type="date" value={draft.date} onChange={(event) => update("date", event.target.value)} /></Question><Question title="D-GITA felt: Angiv på hvilket lovgrundlag at data behandles" hint="Det kan være en idé at tage kontakt til den i kommunen som er informationssikkerhedsansvarlig/koordinator"><label className="clean-select review-select"><select value={draft.legalBasis} onChange={(event) => update("legalBasis", event.target.value as DgitaApproval["legalBasis"])}><option value="">Vælg lovgrundlag</option>{D_GITA_LEGAL_BASES.map((basis) => <option key={basis}>{basis}</option>)}</select><ChevronDown size={16} /></label></Question><Question title="D-GITA felt: D-GITA ansvarlig" hint="Skriv her hvem der er ansvarlig for behandling af formularen."><input className="clean-input" value={draft.responsible} onChange={(event) => update("responsible", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Er der flere D-GITA ansvarlige?"><YesNoControl value={draft.hasAdditionalResponsible} onChange={(next) => update("hasAdditionalResponsible", next)} /></Question>{draft.hasAdditionalResponsible === "Ja" ? <Question title="Hvis ja, angiv næste D-GITA ansvarlige"><input className="clean-input" value={draft.additionalResponsible} onChange={(event) => update("additionalResponsible", event.target.value)} placeholder="Angiv en eller flere personer" /></Question> : null}<Question title="D-GITA felt: IT-konsulent" hint="Vælg den person som bliver koblet på løsningen, som en teknisk ansvarlig fra IT-afdelingen."><input className="clean-input" value={draft.itConsultant} onChange={(event) => update("itConsultant", event.target.value)} placeholder="Søg efter person" /></Question><Question title="D-GITA felt: Medfører systemet ændringer i den eksisterende infrastruktur?"><YesNoControl value={draft.infrastructureChanges} onChange={(next) => update("infrastructureChanges", next)} /></Question><Question title="D-GITA felt: Bemærkninger"><textarea className="clean-input" rows={4} value={draft.notes} onChange={(event) => update("notes", event.target.value)} /></Question><Question title="D-GITA felt: Interne kommentarer" hint="Kommentarer mellem D-GITA konsulenter. Feltet er skjult for anmoder og medtages ikke i den PDF, der genereres ved endelig godkendelse."><textarea className="clean-input internal-comment-input" rows={5} value={draft.internalComments} onChange={(event) => update("internalComments", event.target.value)} /></Question><Question title="D-GITA felt: Fase" hint="Beskriver hvilken fase ansøgningen er i."><label className="clean-select review-select"><select value={draft.phase} onChange={(event) => update("phase", event.target.value as DgitaApproval["phase"])}>{D_GITA_PHASES.map((phase) => <option key={phase}>{phase}</option>)}</select><ChevronDown size={16} /></label></Question></fieldset></section><aside className="review-source-note"><ShieldCheck size={23} /><span className="section-label dark">Kildematch</span><h3>Felter fra den nuværende løsning</h3><p>Godkendelsesfelterne og hjælpeteksterne er kortlagt fra Power Pages-formularen “D-GITA-Godkendelse”.</p><ul><li><Check size={14} /> Betinget ekstra ansvarlig</li><li><Check size={14} /> Lovgrundlag: NSIS, NIS2 eller GDPR</li><li><Check size={14} /> Intern kommentar adskilt fra ansøger</li><li><Check size={14} /> Fase og infrastrukturbeslutning</li></ul></aside></div>;
 }
 
 function FileList({ caseId }: { caseId: string }) {
@@ -1378,6 +1481,7 @@ function Comments({
 }) {
   const [draft, setDraft] = useState("");
   const [visibility, setVisibility] = useState<CaseCommentVisibility>("applicant");
+  useUnsavedChanges(Boolean(draft.trim()), submitting);
 
   async function submit() {
     const body = draft.trim();
@@ -1430,11 +1534,11 @@ function AdminView({
   const isContentTab = tab in CONTENT_CATEGORY_LABELS;
 
   return <div className="portal-page page-width"><PageIntro eyebrow="Administration" title="Indhold, formular og workflows" text="Redigér portaltekster, hjælpetekster, FAQ, links og databehandlerkrav. Administratorrollen har samtidig adgang til sager og D-GITA-behandling."><div className="admin-test-badge"><ShieldCheck size={17} /><span><strong>Admin · servervalideret</strong><small>{viewer.displayName}</small></span></div></PageIntro>
-    <div className="admin-mode-note"><Info size={18} /><p>Ændringer gemmes i portalens database med administratoridentitet og auditspor. Testrollen erstattes senere af kommunal SSO.</p><button className="line-button" type="button" disabled={resetting} onClick={() => { setResetting(true); void onResetContent().then((saved) => { if (saved) onToast("Standardindholdet er gendannet."); }).finally(() => setResetting(false)); }}><RotateCcw size={16} /> {resetting ? "Gendanner…" : "Gendan standard"}</button></div>
-    <nav className="admin-nav" aria-label="Adminområder">{tabs.map(([id, label]) => <button className={tab === id ? "active" : ""} type="button" key={id} onClick={() => setTab(id)}>{label}</button>)}</nav>
+    <div className="admin-mode-note"><Info size={18} /><p>Ændringer gemmes i portalens database med administratoridentitet og auditspor. Testrollen erstattes senere af kommunal SSO.</p><button className="line-button" type="button" disabled={resetting} onClick={() => { if (!window.confirm("Gendan standardteksterne? Dine tilpassede tekster bliver erstattet.")) return; setResetting(true); void onResetContent().then((saved) => { if (saved) onToast("Standardindholdet er gendannet."); }).finally(() => setResetting(false)); }}><RotateCcw size={16} /> {resetting ? "Gendanner…" : "Gendan standard"}</button></div>
+    <nav className="admin-nav" aria-label="Adminområder">{tabs.map(([id, label]) => <button className={tab === id ? "active" : ""} type="button" key={id} onClick={() => { if (confirmNavigation()) setTab(id); }}>{label}</button>)}</nav>
     {isContentTab ? <ContentManager category={tab as ContentCategory} content={content} onUpdate={onUpdateContent} onAdd={onAddContent} onRemove={onRemoveContent} onToast={onToast} /> : null}
-    {tab === "integrationer" ? <div className="admin-layout"><section className="plain-section"><div className="plain-heading"><span className="section-label dark">Systemforbindelser</span><h2>Integrationer</h2></div><div className="integration-list"><Integration icon={Mail} title="Microsoft Outlook" detail="Microsoft Graph-mailkø med automatisk behandling" status="Kræver miljøopsætning" tone="waiting" /><Integration icon={LayoutGrid} title="KITOS" detail="Importeret systemkatalog og lokale systemer" status="Data indlæst" tone="healthy" /><Integration icon={FolderOpen} title="Dokumentlager" detail="Bilag og versionslåste PDF-filer i R2" status="Aktiv" tone="healthy" /><Integration icon={Inbox} title="ESDH" detail="Journalreferencer gemmes; automatisk arkivering er ikke tilsluttet" status="Ikke tilsluttet" tone="waiting" /></div></section><aside className="security-panel"><ShieldCheck size={27} /><span className="section-label">Fremtidig adgang</span><h2>Kommunal SSO og rolleclaims</h2><p>Testdropdownen erstattes af en servervalideret identitet fra Fælleskommunal Adgangsstyring eller kommunens Entra ID.</p><ul><li><Check size={15} /> Stabil brugeridentitet som ejer</li><li><Check size={15} /> Roller fra godkendte grupper</li><li><Check size={15} /> Tenant-adskilte data og auditspor</li></ul></aside></div> : null}
-    {tab === "formular" ? <section className="plain-section admin-table-section"><div className="plain-heading"><span className="section-label dark">Publiceret motorversion 1</span><h2>Formularens sektioner</h2></div><p className="section-lead">Tekster redigeres under Hjælpetekster. Feltnøgler, validering og betingelser er kodeadministreret og låst til en formularversion, så eksisterende ansøgninger ikke ændres bagudrettet.</p>{applicationSteps.slice(0, -1).map((name, index) => <div className="admin-form-row" key={name}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{name}</strong><small>{index === 0 ? "7 felter · 4 betingede regler" : `${3 + index} felter · aktiv`}</small></div></div>)}</section> : null}
+    {tab === "integrationer" ? <div className="admin-layout"><section className="plain-section"><div className="plain-heading"><span className="section-label dark">Systemforbindelser</span><h2>Integrationer</h2></div><div className="integration-list"><Integration icon={Mail} title="Microsoft Outlook" detail="Microsoft Graph-mailkø med automatisk behandling" status="Kræver miljøopsætning" tone="waiting" /><Integration icon={LayoutGrid} title="KITOS" detail="Importeret systemkatalog og lokale systemer" status="Data indlæst" tone="healthy" /><Integration icon={FolderOpen} title="Dokumentlager" detail="Privat dokumentlager med adgangskontrol og kontrolsummer" status="Kontrolleres ved brug" tone="waiting" /><Integration icon={Inbox} title="ESDH" detail="Journalreferencer gemmes; automatisk arkivering er ikke tilsluttet" status="Ikke tilsluttet" tone="waiting" /></div></section><aside className="security-panel"><ShieldCheck size={27} /><span className="section-label">Fremtidig adgang</span><h2>Kommunal SSO og rolleclaims</h2><p>Testdropdownen erstattes af en servervalideret identitet fra Fælleskommunal Adgangsstyring eller kommunens Entra ID.</p><ul><li><Check size={15} /> Stabil brugeridentitet som ejer</li><li><Check size={15} /> Roller fra godkendte grupper</li><li><Check size={15} /> Tenant-adskilte data og auditspor</li></ul></aside></div> : null}
+    {tab === "formular" ? <section className="plain-section admin-table-section"><div className="plain-heading"><span className="section-label dark">Publiceret motorversion 1</span><h2>Formularens sektioner</h2></div><p className="section-lead">Tekster redigeres under Hjælpetekster. Feltnøgler, validering og betingelser er kodeadministreret og låst til en formularversion, så eksisterende ansøgninger ikke ændres bagudrettet.</p>{applicationSteps.slice(0, -1).map((name, index) => <div className="admin-form-row" key={name}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{name}</strong><small>Betingede spørgsmål og servervalidering</small></div></div>)}</section> : null}
     {tab === "mail" ? <MailAdminPanel onToast={onToast} /> : null}
   </div>;
 }
@@ -1458,6 +1562,7 @@ function ContentManager({
   const [newBody, setNewBody] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  useUnsavedChanges(Boolean(newTitle || newBody || newUrl), adding);
   const entries = content.filter((entry) => entry.category === category);
   const needsUrl = category === "link";
 
@@ -1510,6 +1615,7 @@ function ContentEditorCard({
   const [urlError, setUrlError] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  useUnsavedChanges(JSON.stringify(draft) !== JSON.stringify(entry), saving || removing);
 
   async function save() {
     if (draft.url && !isSafeContentUrl(draft.url)) {
@@ -1528,7 +1634,7 @@ function ContentEditorCard({
   async function remove() {
     setRemoving(true);
     try {
-      if (await onRemove(entry.id)) onToast(`“${entry.title}” er fjernet. Standardindhold kan gendannes øverst.`);
+      if (!window.confirm("Slet denne tekst? Egne tekster kan ikke gendannes automatisk.")) return; if (await onRemove(entry.id)) onToast(`“${entry.title}” er fjernet. Egne tekster kan ikke gendannes automatisk.`);
     } finally {
       setRemoving(false);
     }

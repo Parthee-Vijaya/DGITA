@@ -29,6 +29,10 @@ type ReceiptApplicationRow = {
   approver_name: string | null;
   decision_comment: string | null;
   decided_at: string | null;
+  dgita_status?: string | null;
+  dgita_reviewer?: string | null;
+  dgita_comment?: string | null;
+  dgita_decided_at?: string | null;
 };
 
 type StoredReceiptRow = {
@@ -87,7 +91,9 @@ export async function getOrCreateReceipt(
     .bind(actor.tenantId, application.receipt_version_id, kind)
     .first<StoredReceiptRow>();
 
-  if (stored) {
+  // Preserve historical files and audit events, but regenerate legacy final
+  // receipts that predate inclusion of the actual D-GITA decision.
+  if (stored && (kind !== "final" || stored.storage_key.includes("/receipts/v2/"))) {
     const object = await FILES.get(stored.storage_key);
     if (object && stored.checksum_sha256 && stored.size_bytes !== null) {
       const storedBytes = new Uint8Array(await object.arrayBuffer());
@@ -109,7 +115,7 @@ export async function getOrCreateReceipt(
   const bytes = await renderReceipt(application, state, kind);
   const checksum = await sha256(bytes);
   const receiptId = stored?.id ?? `receipt:${actor.tenantId}:${application.receipt_version_id}:${kind}`;
-  const pathname = `tenants/${actor.tenantId}/applications/${application.id}/receipts/${application.receipt_version_id}/${kind}-${checksum}.pdf`;
+  const pathname = `tenants/${actor.tenantId}/applications/${application.id}/receipts/v2/${application.receipt_version_id}/${kind}-${checksum}.pdf`;
   const now = new Date().toISOString();
 
   const storedReceipt = await FILES.put(pathname, bytes, {
@@ -186,7 +192,9 @@ async function findAccessibleApplication(
            version.snapshot_json, version.submitted_at,
            leader_approval.status AS approval_status,
            leader_approval.approver_name, leader_approval.decision_comment,
-           leader_approval.decided_at
+           leader_approval.decided_at,
+           dgita.status AS dgita_status, reviewer.display_name AS dgita_reviewer,
+           dgita.decision_comment AS dgita_comment, dgita.decided_at AS dgita_decided_at
     FROM portal_applications a
     INNER JOIN portal_users owner ON owner.id = a.owner_user_id
     LEFT JOIN portal_application_versions version
@@ -200,6 +208,9 @@ async function findAccessibleApplication(
           AND request.status IN ('approved', 'rejected')
         ORDER BY request.decided_at DESC, request.id DESC LIMIT 1
       )
+    LEFT JOIN portal_dgita_approvals dgita
+      ON dgita.application_id = a.id AND dgita.tenant_id = a.tenant_id AND dgita.application_version_id = version.id
+    LEFT JOIN portal_users reviewer ON reviewer.id = dgita.reviewer_user_id AND reviewer.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND a.case_number = ? ${ownerClause}
     LIMIT 1
   `);
@@ -220,7 +231,7 @@ function parseSnapshot(value: string) {
   }
 }
 
-async function renderReceipt(
+export async function renderReceipt(
   application: ReceiptApplicationRow,
   state: ApplicationFormState,
   kind: ReceiptKind,
@@ -249,7 +260,14 @@ async function renderReceipt(
     layout.meta("Leders beslutning", application.approval_status === "approved" ? "Godkendt" : application.approval_status === "rejected" ? "Afvist" : "Ikke registreret");
     layout.meta("Godkendende leder", application.approver_name || state.approvingLeader);
     layout.meta("Beslutningstidspunkt", formatDate(application.decided_at));
-    if (application.decision_comment) layout.meta("Bemærkning", application.decision_comment.slice(0, 120));
+    if (application.decision_comment) layout.meta("Bemærkning", application.decision_comment);
+  }
+  if (kind === "final") {
+    layout.section("Endelig D-GITA-beslutning");
+    layout.meta("Beslutning", application.dgita_status === "approved" ? "Godkendt" : application.dgita_status === "rejected" ? "Afvist" : "Ikke registreret");
+    layout.meta("Behandlet af", application.dgita_reviewer ?? "Ikke registreret");
+    layout.meta("Beslutningstidspunkt", formatDate(application.dgita_decided_at ?? null));
+    if (application.dgita_comment) layout.field("Bemærkninger", application.dgita_comment);
   }
   layout.rule();
   layout.paragraph(
@@ -307,22 +325,7 @@ class ReceiptLayout {
   }
 
   meta(label: string, value: string) {
-    this.ensure(28);
-    this.page.drawText(pdfSafe(label), {
-      x: this.margin,
-      y: this.y,
-      size: 8.5,
-      font: this.bold,
-      color: rgb(0.325, 0.369, 0.439),
-    });
-    this.page.drawText(pdfSafe(value || "Ikke oplyst"), {
-      x: this.margin + 112,
-      y: this.y,
-      size: 10.5,
-      font: this.regular,
-      color: rgb(0.145, 0.145, 0.145),
-    });
-    this.y -= 24;
+    this.field(label, value);
   }
 
   rule() {
@@ -338,8 +341,8 @@ class ReceiptLayout {
 
   paragraph(value: string) {
     const lines = wrapText(pdfSafe(value), this.regular, 10, this.width - 2 * this.margin);
-    this.ensure(lines.length * 14 + 12);
     for (const line of lines) {
+      this.ensure(14);
       this.page.drawText(line, {
         x: this.margin,
         y: this.y,
@@ -368,27 +371,24 @@ class ReceiptLayout {
   field(label: string, value: string) {
     const safeValue = pdfSafe(value || "Ikke oplyst");
     const lines = wrapText(safeValue, this.regular, 9.5, 322);
-    const height = Math.max(28, lines.length * 13 + 12);
-    this.ensure(height + 6);
-    this.page.drawText(pdfSafe(label), {
-      x: this.margin,
-      y: this.y,
-      size: 8.5,
-      font: this.bold,
-      color: rgb(0.325, 0.369, 0.439),
-    });
-    let valueY = this.y;
-    for (const line of lines) {
-      this.page.drawText(line, {
+    const labels = wrapText(pdfSafe(label), this.bold, 8.5, 130);
+    this.ensure(Math.min(54, Math.max(labels.length, lines.length) * 13 + 12));
+    for (let index = 0; index < Math.max(labels.length, lines.length); index += 1) {
+      this.ensure(13);
+      if (labels[index]) this.page.drawText(labels[index], {
+        x: this.margin, y: this.y, size: 8.5, font: this.bold,
+        color: rgb(0.325, 0.369, 0.439),
+      });
+      if (lines[index]) this.page.drawText(lines[index], {
         x: this.margin + 145,
-        y: valueY,
+        y: this.y,
         size: 9.5,
         font: this.regular,
         color: rgb(0.145, 0.145, 0.145),
       });
-      valueY -= 13;
+      this.y -= 13;
     }
-    this.y -= height;
+    this.y -= 12;
     this.page.drawLine({
       start: { x: this.margin, y: this.y + 6 },
       end: { x: this.width - this.margin, y: this.y + 6 },
@@ -522,7 +522,7 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
-    : new Intl.DateTimeFormat("da-DK", { dateStyle: "long", timeStyle: "short" }).format(date);
+    : new Intl.DateTimeFormat("da-DK", { dateStyle: "long", timeStyle: "short", timeZone: "Europe/Copenhagen" }).format(date);
 }
 
 function receiptDocumentDate(application: ReceiptApplicationRow, kind: ReceiptKind) {

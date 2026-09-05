@@ -269,14 +269,15 @@ export async function processOutbox(actor: ServerActor, limit = 5) {
       UPDATE portal_mail_outbox
       SET status = 'processing', attempt_count = attempt_count + 1,
           updated_at = ?, last_error = NULL
-      WHERE id = ? AND tenant_id = ? AND status IN ('queued', 'failed')
-    `).bind(new Date().toISOString(), row.id, actor.tenantId).run();
+      WHERE id = ? AND tenant_id = ? AND status = 'queued' AND attempt_count = ?
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+    `).bind(new Date().toISOString(), row.id, actor.tenantId, row.attempt_count, now).run();
     if (Number(claimed.meta.changes ?? 0) !== 1) continue;
 
     let accepted;
     try {
-      const attachments = await resolveAttachments(actor, row);
       const content = await materializeMailContent(DB, row);
+      const attachments = await resolveAttachments(actor, row);
       accepted = await transport.send({
         subject: row.subject,
         body: { contentType: "HTML", content: content.html },
@@ -369,11 +370,12 @@ export async function processScheduledOutbox(limitPerTenant = 10) {
   const tenants = await DB.prepare(`
     SELECT DISTINCT outbox.tenant_id
     FROM portal_mail_outbox outbox
-    WHERE outbox.status = 'queued'
+    WHERE (outbox.status = 'queued'
       AND (outbox.next_attempt_at IS NULL OR outbox.next_attempt_at <= ?)
-      AND outbox.attempt_count < 5
+      AND outbox.attempt_count < 5)
+      OR (outbox.status = 'processing' AND outbox.updated_at < ?)
     ORDER BY outbox.tenant_id
-  `).bind(new Date().toISOString()).all<{ tenant_id: string }>();
+  `).bind(new Date().toISOString(), new Date(Date.now() - 15 * 60_000).toISOString()).all<{ tenant_id: string }>();
   let processed = 0;
   let processedTenants = 0;
   for (const tenant of tenants.results) {
@@ -420,10 +422,13 @@ async function materializeMailContent(DB: D1Database, row: OutboxRow) {
   const match = /^approval\.requested:([0-9a-f-]{36}):/iu.exec(row.idempotency_key);
   if (!match) throw new MailAttachmentReferenceError();
   const request = await DB.prepare(`
-    SELECT status FROM portal_approval_requests
-    WHERE id = ? AND tenant_id = ? AND application_id = ?
+    SELECT request.status FROM portal_approval_requests request
+    INNER JOIN portal_applications application
+      ON application.id = request.application_id AND application.tenant_id = request.tenant_id
+    WHERE request.id = ? AND request.tenant_id = ? AND request.application_id = ?
+      AND request.expires_at > ? AND request.application_version_id = application.current_version_id
     LIMIT 1
-  `).bind(match[1], row.tenant_id, row.application_id).first<{ status: string }>();
+  `).bind(match[1], row.tenant_id, row.application_id, new Date().toISOString()).first<{ status: string }>();
   if (request?.status !== "pending") throw new MailCancelledError();
   if (
     !row.text_body.includes(APPROVAL_TOKEN_PLACEHOLDER) ||

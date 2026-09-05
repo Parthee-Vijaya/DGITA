@@ -29,7 +29,7 @@ type WorkspaceMutation =
   | { action: "image.upsert"; entry: ImageEntry }
   | { action: "content.reset" }
   | { action: "image.reset" }
-  | { action: "approval.save"; caseId: string; approval: DgitaApproval }
+  | { action: "approval.save"; caseId: string; approval: DgitaApproval; expectedUpdatedAt: string | null; expectedRowVersion: number }
   | {
       action: "field-comment.add";
       comment: Pick<FieldComment, "id" | "caseId" | "fieldId" | "fieldLabel" | "body" | "visibility">;
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
         await resetWorkspaceImagesForActor(actor);
         return noStoreJson({ ok: true });
       case "approval.save":
-        return noStoreJson({ approval: await saveApprovalForActor(actor, body.caseId, body.approval) });
+        return noStoreJson({ approval: await saveApprovalForActor(actor, body.caseId, body.approval, body.expectedUpdatedAt, body.expectedRowVersion) });
       case "field-comment.add":
         return noStoreJson({ comment: await addFieldCommentForActor(actor, body.comment) }, { status: 201 });
       default:

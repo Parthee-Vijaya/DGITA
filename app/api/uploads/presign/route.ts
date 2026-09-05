@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
+import { readJsonObject,  assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
 import { requireActor } from "../../../../features/auth/server";
 import {
   DirectUploadValidationError,
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const body = await request.json() as Record<string, unknown>;
+    const body = await readJsonObject(request) as Record<string, unknown>;
     if (typeof body.draftId !== "string") {
       return noStoreJson({ error: "Ugyldig kladde." }, { status: 400 });
     }

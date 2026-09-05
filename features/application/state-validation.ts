@@ -99,6 +99,11 @@ export function normalizePersistedApplicationFormState(
   for (const key of APPLICATION_STATE_KEYS) {
     normalized[key] = Object.hasOwn(candidate, key) ? candidate[key] : defaults[key];
   }
+  // Older test fixtures used display casing for the catalog source. Normalize
+  // this known representation only; new API input remains strictly validated.
+  if (isRecord(normalized.selectedSystem) && typeof normalized.selectedSystem.source === "string") {
+    normalized.selectedSystem = { ...normalized.selectedSystem, source: normalized.selectedSystem.source.toLowerCase() };
+  }
 
   return isApplicationFormState(normalized)
     ? normalized

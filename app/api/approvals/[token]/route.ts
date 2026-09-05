@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
+import { readJsonObject,  assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
 import {
   ApprovalWorkflowError,
   decideLeaderApproval,
@@ -24,7 +24,7 @@ export async function POST(
   try {
     assertSameOrigin(request);
     const { token } = await context.params;
-    const body = await request.json() as { decision?: unknown; comment?: unknown };
+    const body = await readJsonObject(request) as { decision?: unknown; comment?: unknown };
     if (body.decision !== "approved" && body.decision !== "rejected") {
       throw new ApprovalWorkflowError(422, "DECISION_INVALID", "Vælg godkend eller afvis.");
     }

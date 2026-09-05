@@ -100,6 +100,41 @@ export function noStoreJson(data: unknown, init: ResponseInit = {}) {
   return Response.json(data, { ...init, headers });
 }
 
+/** Parse bounded JSON without turning invalid client input into a service outage. */
+export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
+  const limit = 750_000;
+  if (Number(request.headers.get("content-length")) > limit) {
+    throw new AuthHttpError(413, "BODY_TOO_LARGE", "Anmodningen er for stor.");
+  }
+  const reader = request.body?.getReader();
+  let size = 0;
+  const chunks: Uint8Array[] = [];
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) {
+          await reader.cancel();
+          throw new AuthHttpError(413, "BODY_TOO_LARGE", "Anmodningen er for stor.");
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let value: unknown;
+  try { value = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { throw new AuthHttpError(400, "INVALID_JSON", "Anmodningen skal indeholde gyldig JSON."); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AuthHttpError(400, "INVALID_JSON", "Anmodningen skal være et JSON-objekt.");
+  }
+  return value as Record<string, unknown>;
+}
+
 export function authErrorResponse(error: unknown) {
   if (error instanceof AuthHttpError) {
     return noStoreJson(

@@ -6571,3 +6571,24 @@ textarea.clean-input {
     transition-duration: .01ms !important;
   }
 }
+.data-state {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-block: 2rem;
+  padding: 1.5rem;
+  border: 1px solid #c9ced4;
+  border-left: 3px solid #273847;
+  background: #fff;
+  color: #273847;
+}
+.data-state p { margin: .4rem 0 0; max-width: 65ch; line-height: 1.6; }
+.data-state svg { flex-shrink: 0; margin-top: .1rem; }
+.data-state button { margin-left: auto; flex-shrink: 0; }
+.featured-progress { gap: 1rem; }
+@media (max-width: 600px) {
+  .data-state { flex-wrap: wrap; }
+  .data-state button { margin-left: 0; }
+}
+.review-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.review-lock-note { display: flex; align-items: center; gap: .6rem; padding: 1rem 0; color: #344556; line-height: 1.6; }

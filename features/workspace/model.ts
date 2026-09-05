@@ -264,6 +264,7 @@ export const D_GITA_LEGAL_BASES = ["NSIS", "NIS2", "GDPR"] as const;
 export const D_GITA_PHASES = ["Kladde", "Indsendt", "Under behandling", "Afsluttet"] as const;
 
 export type DgitaApproval = {
+  revision?: number;
   approved: "" | "Ja" | "Nej";
   date: string;
   legalBasis: "" | (typeof D_GITA_LEGAL_BASES)[number];

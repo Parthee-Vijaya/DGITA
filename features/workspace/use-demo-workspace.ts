@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import type { Actor } from "../auth/types";
@@ -35,8 +35,10 @@ export function useDemoWorkspace(viewer: Actor) {
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
       const response = await fetch("/api/workspace", { cache: "no-store" });
@@ -51,18 +53,19 @@ export function useDemoWorkspace(viewer: Actor) {
       if (!response.ok || !payload.workspace) {
         throw new Error(payload.error || "Portalindholdet kunne ikke hentes.");
       }
+      if (requestId !== requestRef.current) return;
       setWorkspace(payload.workspace);
       setError(null);
     } catch (reason) {
-      setError((reason as Error).message);
+      if (requestId === requestRef.current) setError((reason as Error).message);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, [router]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void refresh(), 0);
-    return () => window.clearTimeout(timeout);
+    return () => { window.clearTimeout(timeout); requestRef.current += 1; };
   }, [refresh, viewer.role, viewer.subject, viewer.tenantId]);
 
   const mutate = useCallback(async <T,>(body: unknown): Promise<T> => {
@@ -81,7 +84,8 @@ export function useDemoWorkspace(viewer: Actor) {
       setError(null);
       return payload;
     } catch (reason) {
-      setError((reason as Error).message);
+      // Mutation failures belong to the editor; a failed save must never
+      // unmount the editor or discard its unsaved input.
       throw reason;
     }
   }, [router]);
@@ -156,6 +160,8 @@ export function useDemoWorkspace(viewer: Actor) {
       action: "approval.save",
       caseId,
       approval: normalizeDgitaApproval(approval),
+      expectedUpdatedAt: approval.updatedAt ?? null,
+      expectedRowVersion: approval.revision,
     });
     setWorkspace((current) => ({
       ...current,

@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../features/auth/http";
+import { readJsonObject,  assertSameOrigin, authErrorResponse, noStoreJson } from "../../../features/auth/http";
 import { requireActor } from "../../../features/auth/server";
 import {
   ApplicationRepositoryError,
@@ -47,7 +47,7 @@ export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const body = (await request.json()) as { id?: unknown; draftId?: unknown };
+    const body = (await readJsonObject(request)) as { id?: unknown; draftId?: unknown };
     if (typeof body.id !== "string" || typeof body.draftId !== "string") {
       return noStoreJson({ error: "Ugyldigt bilag." }, { status: 400 });
     }

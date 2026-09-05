@@ -24,6 +24,7 @@ import {
   type DirectUploadMetadata,
 } from "./direct-upload-policy";
 import { normalizePersistedApplicationFormState } from "./state-validation";
+import { canonicalCatalogSelection } from "../catalog/selection";
 
 type ApplicationRow = {
   id: string;
@@ -67,22 +68,27 @@ export class ApplicationRepositoryError extends Error {
   }
 }
 
-export async function getLatestApplicationDraft(actor: ServerActor) {
+export async function getLatestApplicationDraft(actor: ServerActor, caseNumberValue?: string | null) {
   assertCanCreate(actor);
+  const caseNumber = caseNumberValue ? normalizeCaseNumber(caseNumberValue) : null;
   const DB = await portalDb();
   const row = await DB.prepare(`
     SELECT id, tenant_id, owner_user_id, case_number, draft_state_json, status,
            row_version, current_version_number, current_version_id, updated_at
     FROM portal_applications
     WHERE tenant_id = ? AND owner_user_id = ? AND status = 'draft'
-      AND id NOT LIKE 'demo:%'
+      AND (? IS NOT NULL OR id NOT LIKE 'demo:%')
+      AND (? IS NULL OR case_number = ?)
     ORDER BY updated_at DESC LIMIT 1
   `)
-    .bind(actor.tenantId, actor.userId)
+    .bind(actor.tenantId, actor.userId, caseNumber, caseNumber, caseNumber)
     .first<ApplicationRow>();
-  if (!row) return null;
+  if (!row) {
+    if (caseNumber) throw new ApplicationRepositoryError(404, "Kladden findes ikke, eller du har ikke adgang til den.");
+    return null;
+  }
   const state = parseApplicationState(row.draft_state_json);
-  if (!state) return null;
+  if (!state) throw new ApplicationRepositoryError(409, "Kladdens formularstruktur kunne ikke læses. Den er bevaret uændret; kontakt administratoren for hjælp.");
   const attachments = await getApplicationAttachments(DB, row.id);
   return {
     id: row.id,
@@ -148,7 +154,9 @@ export async function beginApplicationCorrection(
       SET status = 'cancelled'
       WHERE tenant_id = ? AND application_id = ?
         AND status IN ('pending', 'approving', 'rejecting')
-    `).bind(actor.tenantId, row.id),
+        AND application_version_id = ?
+        AND EXISTS (SELECT 1 FROM portal_applications WHERE id = ? AND status = 'changes_requested' AND current_version_id = ?)
+    `).bind(actor.tenantId, row.id, row.current_version_id, row.id, row.current_version_id),
     DB.prepare(`
       UPDATE portal_mail_outbox
       SET status = CASE
@@ -160,9 +168,15 @@ export async function beginApplicationCorrection(
           updated_at = ?
       WHERE tenant_id = ? AND application_id = ?
         AND template_key = 'approval.requested' AND status <> 'sent'
-    `).bind(now, actor.tenantId, row.id),
+        AND EXISTS (SELECT 1 FROM portal_applications WHERE id = ? AND status = 'changes_requested' AND current_version_id = ?)
+    `).bind(now, actor.tenantId, row.id, row.id, row.current_version_id),
   ]);
   await initializeCorrectionAttachments(DB, actor, row);
+
+  const current = await findApplicationById(DB, row.id);
+  if (current?.status !== 'changes_requested' || current.current_version_id !== row.current_version_id || current.row_version !== row.row_version) {
+    throw new ApplicationRepositoryError(409, "Sagen er ændret. Åbn den nyeste version, før du retter videre.");
+  }
 
   const attachments = await getApplicationAttachments(DB, row.id);
   return {
@@ -192,6 +206,8 @@ export async function saveApplicationDraft(
 ) {
   assertCanCreate(actor);
   assertApplicationId(id);
+  try { state = canonicalCatalogSelection(state); }
+  catch (error) { throw new ApplicationRepositoryError(422, (error as Error).message); }
   const serialized = JSON.stringify(state);
   if (serialized.length > 600_000) {
     throw new ApplicationRepositoryError(413, "Kladden er for stor.");
@@ -199,6 +215,7 @@ export async function saveApplicationDraft(
 
   const DB = await portalDb();
   const existing = await findApplicationById(DB, id);
+  if (!existing && id.startsWith("demo:")) throw new ApplicationRepositoryError(404, "Testkladden findes ikke.");
   if (existing) {
     assertOwner(actor, existing);
     if (expectedRowVersion !== existing.row_version) {
@@ -385,7 +402,9 @@ export async function submitApplication(
   }
 
   const attachments = await getApplicationAttachments(DB, id);
-  const canonicalState = hydratePortalAttachments(state, attachments);
+  let canonicalState: ApplicationFormState;
+  try { canonicalState = canonicalCatalogSelection(hydratePortalAttachments(state, attachments)); }
+  catch (error) { throw new ApplicationRepositoryError(422, (error as Error).message); }
   const errors = getAllErrors(canonicalState);
   if (errors.length > 0) {
     throw new ApplicationRepositoryError(
@@ -771,7 +790,13 @@ export async function storeApplicationAttachment(
       );
     }
   } catch (error) {
-    await FILES.delete(storageKey);
+    // A database commit can succeed even when its response is lost. Never
+    // remove the file unless an authoritative read confirms no committed row.
+    try {
+      const committed = await DB.prepare("SELECT id FROM portal_attachments WHERE id = ? AND tenant_id = ? AND storage_key = ?")
+        .bind(id, actor.tenantId, storageKey).first<{ id: string }>();
+      if (!committed) await FILES.delete(storageKey);
+    } catch { /* Retain the object for reconciliation when the database is unavailable. */ }
     throw error;
   }
   return {
@@ -1492,7 +1517,8 @@ async function initializeCorrectionAttachments(
          kind, original_name, size_bytes, content_type, storage_key,
          checksum_sha256, status, scan_status, uploaded_by_user_id,
          created_at, immutable_at, deleted_at)
-      VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, NULL, NULL)
+      SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, NULL, NULL
+      WHERE EXISTS (SELECT 1 FROM portal_applications WHERE id = ? AND status = 'changes_requested' AND current_version_id = ?)
     `).bind(
       id,
       actor.tenantId,
@@ -1507,6 +1533,8 @@ async function initializeCorrectionAttachments(
       attachment.scan_status,
       actor.userId,
       now,
+      application.id,
+      versionId,
     ).run();
   }
 
@@ -1514,7 +1542,8 @@ async function initializeCorrectionAttachments(
     INSERT OR IGNORE INTO portal_audit_events
       (id, tenant_id, application_id, actor_user_id, actor_subject, event_type,
        entity_type, entity_id, payload_json, ip_hash, occurred_at)
-    VALUES (?, ?, ?, ?, ?, 'application.correction_started', 'application', ?, ?, NULL, ?)
+    SELECT ?, ?, ?, ?, ?, 'application.correction_started', 'application', ?, ?, NULL, ?
+    WHERE EXISTS (SELECT 1 FROM portal_applications WHERE id = ? AND status = 'changes_requested' AND current_version_id = ?)
   `).bind(
     auditEventId,
     actor.tenantId,
@@ -1528,6 +1557,8 @@ async function initializeCorrectionAttachments(
       copiedAttachmentCount: source.results.length,
     }),
     now,
+    application.id,
+    versionId,
   ).run();
 }
 
@@ -1584,7 +1615,7 @@ function parseApplicationState(value: string): ApplicationFormState | null {
 }
 
 function assertApplicationId(id: string) {
-  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) {
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) && !/^demo:ITA-\d{6,8}$/u.test(id)) {
     throw new ApplicationRepositoryError(400, "Ugyldig kladde.");
   }
 }

@@ -1,4 +1,5 @@
 "use client";
+import { confirmNavigation, useUnsavedChanges } from "../application/use-unsaved-changes";
 
 import {
   ImagePlus,
@@ -189,17 +190,27 @@ export function EditorDrawer({
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  useUnsavedChanges(JSON.stringify(draft) !== JSON.stringify(selection), saving || uploading);
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!selection) return;
+    const previousFocus = document.activeElement;
     closeRef.current?.focus();
     function closeOnEscape(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && confirmNavigation()) onClose();
+      if (event.key === "Tab") {
+        const drawer = closeRef.current?.closest("[role='dialog']");
+        const controls = Array.from(drawer?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]") ?? []);
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     }
     window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    return () => { window.removeEventListener("keydown", closeOnEscape); if (previousFocus instanceof HTMLElement) previousFocus.focus(); };
   }, [onClose, selection]);
 
   if (!selection || !draft) return null;
@@ -216,7 +227,7 @@ export function EditorDrawer({
     setError("");
     try {
       const src = await compressImage(file);
-      setDraft({ kind: "image", entry: { ...draft.entry, src } });
+      setDraft((current) => current?.kind === "image" && current.entry.id === draft.entry.id ? { ...current, entry: { ...current.entry, src } } : current);
     } catch {
       setError("Billedet kunne ikke læses. Prøv PNG, JPG eller WebP.");
     } finally {
@@ -265,6 +276,7 @@ export function EditorDrawer({
   }
 
   async function resetImages() {
+    if (!window.confirm("Gendan standardbillederne? Dine egne billedvalg vil blive erstattet.")) return;
     setSaving(true);
     setError("");
     try {
@@ -278,11 +290,11 @@ export function EditorDrawer({
 
   return (
     <>
-      <button className="cms-drawer-backdrop" type="button" onClick={onClose} aria-label="Luk editor" />
+      <button className="cms-drawer-backdrop" type="button" onClick={() => { if (confirmNavigation()) onClose(); }} aria-label="Luk editor" />
       <aside className="cms-drawer" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <div><span className="section-label dark">Admin · Editor mode</span><h2 id={titleId}>{draft.kind === "content" ? "Redigér tekst" : "Erstat billede"}</h2></div>
-          <button ref={closeRef} type="button" onClick={onClose} aria-label="Luk editor"><X size={20} /></button>
+          <button ref={closeRef} type="button" onClick={() => { if (confirmNavigation()) onClose(); }} aria-label="Luk editor"><X size={20} /></button>
         </header>
 
         <div className="cms-drawer-body">

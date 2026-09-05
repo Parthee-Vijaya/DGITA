@@ -5,6 +5,11 @@ import {
   normalizeDgitaApproval,
   type DgitaApproval,
   type FieldComment,
+  type ContentEntry,
+  type ImageEntry,
+  CONTENT_CATEGORY_LABELS,
+  isSafeContentUrl,
+  isSafeImageUrl,
 } from "./model";
 
 const YES_NO_OR_EMPTY = new Set(["", "Ja", "Nej"]);
@@ -13,6 +18,29 @@ const PHASES = new Set<string>(D_GITA_PHASES);
 const FIELD_LABELS = new Map<string, string>(
   COMMENTABLE_APPLICATION_FIELDS.map((field) => [field.id, field.label]),
 );
+
+export function normalizeContentInput(value: unknown): ContentEntry {
+  const input = objectInput(value, "Indholdet er ugyldigt.");
+  const id = boundedString(input.id, "Indholds-id", 160);
+  const title = boundedString(input.title, "Titel", 500).trim();
+  const body = boundedString(input.body, "Tekst", 60_000).trim();
+  const location = boundedString(input.location, "Placering", 300);
+  const category = enumString(input.category, new Set(Object.keys(CONTENT_CATEGORY_LABELS)), "Indholdstypen er ugyldig.") as ContentEntry["category"];
+  if (!id || !title || !body || typeof input.published !== "boolean") throw new WorkspaceInputError(422, "Titel, tekst og publiceringsstatus skal være gyldige.");
+  const url = input.url === undefined ? undefined : boundedString(input.url, "Link", 2048);
+  if (url && !isSafeContentUrl(url)) throw new WorkspaceInputError(422, "Linkadressen er ikke tilladt.");
+  return { id, title, body, location, category, published: input.published, ...(url !== undefined ? { url } : {}) };
+}
+
+export function normalizeImageInput(value: unknown): ImageEntry {
+  const input = objectInput(value, "Billedet er ugyldigt.");
+  const id = boundedString(input.id, "Billed-id", 160);
+  const src = boundedString(input.src, "Billede", 6_000_000);
+  const alt = boundedString(input.alt, "Alttekst", 1000).trim();
+  const location = boundedString(input.location, "Placering", 300);
+  if (!id || !alt || !isSafeImageUrl(src)) throw new WorkspaceInputError(422, "Billede eller alttekst er ugyldig.");
+  return { id, src, alt, location };
+}
 
 export class WorkspaceInputError extends Error {
   constructor(
@@ -101,6 +129,12 @@ export function lifecycleForDgitaApproval(
   },
   now: string,
 ): ApplicationLifecycle {
+  if (application.status === "changes_requested") {
+    throw new WorkspaceInputError(409, "Anmoderen skal genindsende rettelserne, før D-GITA kan fortsætte behandlingen.");
+  }
+  if (!application.currentVersionId && (approval.phase !== "Kladde" || approval.approved)) {
+    throw new WorkspaceInputError(409, "Ansøgningen skal være indsendt og versionslåst, før D-GITA kan behandle den.");
+  }
   if (application.status === "closed") {
     throw new WorkspaceInputError(
       409,

@@ -262,11 +262,15 @@ async function main() {
   expectStatus(fieldComment.response.status, 201, "versionsbundet feltkommentar", fieldComment.payload);
   assert.equal(fieldComment.payload.comment.fieldLabel, "Formål og ønsket effekt");
 
+  const reviewWorkspace = await consultant.json("/api/workspace");
+  const loadedReview = reviewWorkspace.payload.workspace.approvals[caseNumber];
   const finalized = await consultant.json("/api/workspace", {
     method: "POST",
     body: {
       action: "approval.save",
       caseId: caseNumber,
+      expectedUpdatedAt: loadedReview.updatedAt ?? null,
+      expectedRowVersion: loadedReview.revision,
       approval: {
         approved: "Ja",
         date: new Date().toISOString().slice(0, 10),
@@ -291,6 +295,8 @@ async function main() {
       action: "approval.save",
       caseId: caseNumber,
       approval: finalized.payload.approval,
+      expectedUpdatedAt: finalized.payload.approval.updatedAt,
+      expectedRowVersion: finalized.payload.approval.revision,
     },
   });
   expectStatus(

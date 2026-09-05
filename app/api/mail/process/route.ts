@@ -1,4 +1,4 @@
-import { assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
+import { readJsonObject,  assertSameOrigin, authErrorResponse, noStoreJson } from "../../../../features/auth/http";
 import { requireActor } from "../../../../features/auth/server";
 import { OutboxError, processOutbox } from "../../../../features/mail/outbox";
 
@@ -6,7 +6,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const actor = await requireActor(request);
-    const input = await request.json().catch(() => ({})) as { limit?: unknown };
+    const input = await readJsonObject(request) as { limit?: unknown };
     if (
       input.limit !== undefined &&
       (typeof input.limit !== "number" || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 10)
